@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Camera, ChevronRight, CloudSun, FileUp, Leaf, MapPin, MessageCircle, Mic, MoreHorizontal, QrCode, Send, Sprout } from 'lucide-react';
+import { CloudSun, Eye, EyeOff, Leaf, LoaderCircle, MapPin, MessageCircle, MoreHorizontal, QrCode, Send, Settings2, Sprout } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const tasks = [
@@ -21,17 +23,33 @@ const weekPlan = [
   ['下周一', '授粉与巡棚', '10:00 前完成熊蜂箱检查，记录落花率。'],
 ];
 
-const answers: Record<string, { lead: string; body: string; actions: string[] }> = {
-  '这周怎么追肥？': {
-    lead: '这周只安排一次追肥，放在明天上午。',
-    body: '东棚番茄正处于二穗果膨大期，结合基质 EC 2.1 mS/cm 和未来两天无强降雨，建议采用高钾配方，避免继续偏施氮肥。',
-    actions: ['高钾水溶肥 4 kg / 亩', '滴灌 25 分钟', '两天后复测 EC'],
-  },
-  '帮我看叶片病斑': {
-    lead: '可以，先拍下部叶正反面和整株环境。',
-    body: '最好在自然光下拍 3 张：病斑近照、叶片正反面、整株与棚内环境。农心会先判断是否具备典型特征，再给出复查或处置步骤。',
-    actions: ['避开强反光', '叶片占画面 2/3', '同时记录棚内湿度'],
-  },
+type ProviderId = 'deepseek' | 'openai' | 'siliconflow' | 'custom';
+
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+type AiSettings = {
+  provider: ProviderId;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+};
+
+const providerOptions: Record<ProviderId, { label: string; baseUrl: string; model: string }> = {
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash-vision-exp' },
+  openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.2' },
+  siliconflow: { label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3.2' },
+  custom: { label: '自定义兼容接口', baseUrl: '', model: '' },
+};
+
+const initialSettings: AiSettings = {
+  provider: 'deepseek',
+  model: providerOptions.deepseek.model,
+  baseUrl: providerOptions.deepseek.baseUrl,
+  apiKey: '',
 };
 
 declare global {
@@ -45,57 +63,99 @@ declare global {
 export default function Home() {
   const [activeTab, setActiveTab] = useState('ask');
   const [query, setQuery] = useState('');
-  const [submitted, setSubmitted] = useState('');
-  const [reply, setReply] = useState<(typeof answers)[string] | null>(null);
-  const [uploadName, setUploadName] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isSending, setIsSending] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<AiSettings>(initialSettings);
+  const [settingsDraft, setSettingsDraft] = useState<AiSettings>(initialSettings);
+  const [settingsError, setSettingsError] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [planConcern, setPlanConcern] = useState('高湿病害风险与二穗果水肥管理');
-  const fileInput = useRef<HTMLInputElement>(null);
   const chatInput = useRef<HTMLTextAreaElement>(null);
+  const conversationEnd = useRef<HTMLDivElement>(null);
   const [scanUrl, setScanUrl] = useState('https://nongxin-agent.site/?channel=wechat');
 
-  const submitQuestion = (text = query) => {
+  const submitQuestion = async (text = query) => {
     const clean = text.trim();
-    if (!clean) return;
-    setSubmitted(clean);
-    setReply(answers[clean] ?? {
-      lead: '这件事需要结合东棚数据分两步处理。',
-      body: '我已把你的问题和当前作物生育期、近 7 天棚内温湿度以及本地农技资料放在一起核对。先完成现场确认，再生成用量和时间都明确的处置单。',
-      actions: ['核对田间现状', '匹配本地规程', '生成可执行清单'],
-    });
-    setQuery('');
-  };
-
-  const chooseQuickAsk = (text: string) => {
-    if (text.includes('7 天')) {
-      setPlanConcern('未来 7 天病害预防与水肥安排');
-      setActiveTab('plan');
+    if (!clean || isSending) return;
+    if (!settings.apiKey) {
+      setSettingsDraft(settings);
+      setSettingsError('先填写 API 密钥，再开始对话。');
+      setSettingsOpen(true);
       return;
     }
-    submitQuestion(text);
+
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: clean };
+    const history = [...messages, userMessage];
+    setMessages(history);
+    setQuery('');
+    setChatError('');
+    setIsSending(true);
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: settings.provider,
+          model: settings.model,
+          baseUrl: settings.baseUrl,
+          apiKey: settings.apiKey,
+          messages: history.map(({ role, content }) => ({ role, content })),
+        }),
+      });
+      const data = await response.json() as { reply?: string; error?: string };
+      if (!response.ok || !data.reply) throw new Error(data.error || '暂时没有收到回答，请稍后再试。');
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', content: data.reply! }]);
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : '对话请求失败，请检查设置后重试。');
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setUploadName(file.name);
-    setSubmitted(`已上传农情数据：${file.name}`);
-    let body = '系统已将文件加入东棚本次分析，并结合田块档案重新计算风险。正式接入后可继续解析 Excel、PDF 检测单与田间图片。';
-    let actions = ['完成文件校验', '关联东棚档案', '加入 7 天方案'];
-    if (file.name.toLowerCase().endsWith('.csv')) {
-      const rows = (await file.text()).trim().split(/\r?\n/).map((line) => line.split(','));
-      const humidityIndex = rows[0]?.findIndex((cell) => cell.trim() === 'humidity_pct') ?? -1;
-      const humidityValues = humidityIndex >= 0 ? rows.slice(1).map((row) => Number(row[humidityIndex])).filter(Number.isFinite) : [];
-      const highHours = humidityValues.filter((value) => value > 85).length;
-      const peak = humidityValues.length ? Math.max(...humidityValues) : 0;
-      body = humidityValues.length ? `共读取 ${humidityValues.length} 条湿度记录，其中 ${highHours} 条高于 85%，峰值 ${peak}%。这与东棚叶片结露记录吻合，我已将持续高湿计入病害风险判断。` : 'CSV 已读取，但没有找到 humidity_pct 列；请核对表头后再上传。';
-      actions = humidityValues.length ? [`读取 ${humidityValues.length} 条记录`, `高湿 ${highHours} 小时`, '加入 7 天方案'] : ['检查 CSV 表头', '保留原田块判断', '等待重新上传'];
-    }
-    setReply({
-      lead: '农情文件已读取，风险判断同步更新。',
-      body,
-      actions,
-    });
+  const changeProvider = (provider: ProviderId) => {
+    const preset = providerOptions[provider];
+    if (!preset) return;
+    setSettingsDraft((current) => ({ ...current, provider, baseUrl: preset.baseUrl, model: preset.model }));
   };
+
+  const saveSettings = () => {
+    const next = {
+      ...settingsDraft,
+      model: settingsDraft.model.trim(),
+      baseUrl: settingsDraft.baseUrl.trim(),
+      apiKey: settingsDraft.apiKey.trim(),
+    };
+    if (!next.model) return setSettingsError('请填写模型名称。');
+    if (!next.apiKey) return setSettingsError('请填写 API 密钥。');
+    if (next.provider === 'custom' && !next.baseUrl.startsWith('https://')) return setSettingsError('自定义 API 地址需要以 https:// 开头。');
+    setSettings(next);
+    sessionStorage.setItem('nongxin-ai-settings', JSON.stringify(next));
+    setSettingsError('');
+    setSettingsOpen(false);
+    setChatError('');
+  };
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('nongxin-ai-settings');
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as AiSettings;
+      if (providerOptions[parsed.provider] && parsed.model && parsed.apiKey) {
+        const timer = window.setTimeout(() => {
+          setSettings(parsed);
+          setSettingsDraft(parsed);
+        }, 0);
+        return () => window.clearTimeout(timer);
+      }
+    } catch { /* ignore invalid local preferences */ }
+  }, []);
+
+  useEffect(() => {
+    conversationEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [messages, isSending]);
 
   useEffect(() => {
     const context = document.modelContext;
@@ -133,7 +193,47 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><Sprout size={21} strokeWidth={2.2} /></span><span className="brand-name">农心</span><span className="brand-sub">田间决策助手</span></div>
         <div className="top-actions">
-          <span className="service-dot">服务正常</span>
+          <span className={`service-dot ${settings.apiKey ? '' : 'unconfigured'}`}>{settings.apiKey ? `${providerOptions[settings.provider].label} 已配置` : 'AI 待配置'}</span>
+          <Dialog open={settingsOpen} onOpenChange={(open) => { setSettingsOpen(open); if (open) { setSettingsDraft(settings); setSettingsError(''); } }}>
+            <DialogTrigger render={<Button className="settings-button" />}><Settings2 size={17} />设置</DialogTrigger>
+            <DialogContent className="settings-dialog">
+              <DialogHeader>
+                <DialogTitle>AI 对话设置</DialogTitle>
+                <DialogDescription>选择供应商与模型。密钥只保存在当前浏览器会话，关闭浏览器后自动清除。</DialogDescription>
+              </DialogHeader>
+              <div className="settings-form">
+                <div className="settings-field">
+                  <span>供应商</span>
+                  <Select value={settingsDraft.provider} onValueChange={(value) => changeProvider(value as ProviderId)}>
+                    <SelectTrigger className="settings-select"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(providerOptions).map(([id, item]) => <SelectItem key={id} value={id}>{item.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <label htmlFor="model-name">
+                  <span>模型</span>
+                  <Input id="model-name" value={settingsDraft.model} onChange={(event) => setSettingsDraft((current) => ({ ...current, model: event.target.value }))} placeholder="填写模型名称" autoComplete="off" />
+                </label>
+                <label htmlFor="api-base-url">
+                  <span>API 地址</span>
+                  <Input id="api-base-url" value={settingsDraft.baseUrl} onChange={(event) => setSettingsDraft((current) => ({ ...current, baseUrl: event.target.value }))} readOnly={settingsDraft.provider !== 'custom'} placeholder="https://example.com/v1" autoComplete="off" />
+                  {settingsDraft.provider !== 'custom' && <small>由所选供应商自动填写</small>}
+                </label>
+                <div className="settings-field">
+                  <label htmlFor="api-key">API 密钥</label>
+                  <div className="key-field">
+                    <Input id="api-key" type={showKey ? 'text' : 'password'} value={settingsDraft.apiKey} onChange={(event) => setSettingsDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder="粘贴 API Key" autoComplete="off" spellCheck={false} />
+                    <button type="button" onClick={() => setShowKey((visible) => !visible)} aria-label={showKey ? '隐藏密钥' : '显示密钥'}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+                  </div>
+                </div>
+                {settingsError && <p className="settings-error">{settingsError}</p>}
+              </div>
+              <DialogFooter className="settings-footer">
+                <Button onClick={saveSettings} className="save-settings">保存设置</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Dialog>
             <DialogTrigger onClick={() => setScanUrl(`${window.location.origin}/?channel=wechat`)} render={<Button className="wechat-button" />}><QrCode size={17} />微信接入</DialogTrigger>
             <DialogContent className="qr-dialog">
@@ -173,34 +273,27 @@ export default function Home() {
                 <div className="assistant-row">
                   <span className="bot-seal">农心</span>
                   <div className="message-block">
-                    <div className="speaker"><b>农心助手</b><span>结合东棚近 7 天数据</span></div>
+                    <div className="speaker"><b>农心助手</b><span>{providerOptions[settings.provider].label} · {settings.model}</span></div>
                     <div className="answer-card">
-                      <p className="answer-lead">林师傅，东棚番茄今天先控湿，不急着打药。</p>
-                      <p>昨晚棚内湿度连续 5 小时高于 85%，叶面有结露，早疫病风险正在上升。你发来的叶片照片里，斑点还没出现同心轮纹，暂不能直接判定病害。</p>
-                      <div className="action-strip"><span>今天先做</span><strong>通风 40 分钟</strong><i /><strong>暂停叶面喷水</strong><i /><strong>傍晚再拍 3 张</strong></div>
-                      <button className="source-link">依据 4 条本地农技资料生成 <ChevronRight size={15} /></button>
+                      <p className="answer-lead">林师傅，我在。</p>
+                      <p>直接说说田里遇到的情况，我会先给判断，再把建议整理成能照着做的步骤。信息不够时，我会明确问你补充什么。</p>
                     </div>
-                    {submitted && reply && <>
-                      <div className="user-message">{submitted}</div>
-                      <div className="answer-card followup-answer">
-                        <p className="answer-lead">{reply.lead}</p>
-                        <p>{reply.body}</p>
-                        <div className="action-strip"><span>接下来</span>{reply.actions.map((action, index) => <span className="action-piece" key={action}>{action}{index < reply.actions.length - 1 && <i />}</span>)}</div>
-                        <button className="source-link">已核对田块档案与本地资料 <ChevronRight size={15} /></button>
-                      </div>
-                    </>}
+                    {messages.map((message) => message.role === 'user'
+                      ? <div className="user-message" key={message.id}>{message.content}</div>
+                      : <div className="answer-card followup-answer chat-answer" key={message.id}>{message.content}</div>)}
+                    {isSending && <div className="answer-card followup-answer loading-answer"><LoaderCircle size={17} className="spin" />农心正在斟酌...</div>}
+                    {chatError && <div className="chat-error"><span>{chatError}</span><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>检查设置</button></div>}
+                    <div ref={conversationEnd} />
                   </div>
                 </div>
               </div>
-              {uploadName && <div className="upload-chip"><FileUp size={14} />已读取 {uploadName}</div>}
-              <div className="quick-asks"><button onClick={() => chooseQuickAsk('这周怎么追肥？')}>这周怎么追肥？</button><button onClick={() => chooseQuickAsk('帮我看叶片病斑')}>帮我看叶片病斑</button><button onClick={() => chooseQuickAsk('生成 7 天农事安排')}>生成 7 天农事安排</button></div>
+              <div className="quick-asks"><button onClick={() => void submitQuestion('这周怎么追肥？')}>这周怎么追肥？</button><button onClick={() => void submitQuestion('番茄叶片有褐色病斑，应该先确认什么？')}>叶片病斑怎么判断？</button><button onClick={() => void submitQuestion('请帮我列一个简洁的 7 天番茄农事安排，需要我先补充哪些信息？')}>生成 7 天农事安排</button></div>
               <div className="composer-wrap">
                 <div className="composer">
-                  <textarea ref={chatInput} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitQuestion(); } }} aria-label="向农心提问" placeholder="说说田里遇到的事，也可以上传照片、检测表……" />
-                  <input ref={fileInput} type="file" accept=".csv,.xlsx,.xls,.pdf,image/*" onChange={handleUpload} hidden />
-                  <div className="composer-tools"><div><button onClick={() => fileInput.current?.click()} aria-label="上传农情文件"><FileUp size={19} /></button><button onClick={() => { setQuery('请帮我识别这张叶片照片里的病斑'); chatInput.current?.focus(); }} aria-label="拍照"><Camera size={19} /></button><button onClick={() => { setQuery('语音输入：东棚番茄叶子有褐色小斑点，该怎么处理？'); chatInput.current?.focus(); }} aria-label="语音输入"><Mic size={19} /></button></div><button onClick={() => submitQuestion()} className="send-button" aria-label="发送"><Send size={18} /></button></div>
+                  <textarea ref={chatInput} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitQuestion(); } }} aria-label="向农心提问" placeholder="说说田里遇到的事……" />
+                  <div className="composer-tools"><span className="composer-model">{providerOptions[settings.provider].label} · {settings.model}</span><button onClick={() => submitQuestion()} disabled={isSending || !query.trim()} className="send-button" aria-label="发送">{isSending ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />}</button></div>
                 </div>
-                <div className="composer-foot"><p>重要农事请结合田间实际确认，农药使用以当地登记标签为准。</p><a href="/sample-sensor.csv" download>下载示例农情数据</a></div>
+                <div className="composer-foot"><p>重要农事请结合田间实际确认，农药使用以当地登记标签为准。</p><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>切换模型</button></div>
               </div>
             </TabsContent>
             <TabsContent value="plan" className="plan-view">
