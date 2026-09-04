@@ -54,6 +54,29 @@ function sanitizeMessages(value: unknown): ChatMessage[] {
   return messages;
 }
 
+function liveContextMessage(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const context = value as Record<string, unknown>;
+  const latitude = typeof context.latitude === 'number' && Number.isFinite(context.latitude) ? context.latitude : null;
+  const longitude = typeof context.longitude === 'number' && Number.isFinite(context.longitude) ? context.longitude : null;
+  if (latitude === null || longitude === null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+
+  const weather = context.weather && typeof context.weather === 'object' ? context.weather as Record<string, unknown> : {};
+  const numberFact = (name: string, unit: string) => {
+    const value = weather[name];
+    return typeof value === 'number' && Number.isFinite(value) ? `${value}${unit}` : '未获取';
+  };
+  const safeText = (value: unknown, fallback = '未获取') => typeof value === 'string' && value.trim() ? value.trim().slice(0, 120) : fallback;
+
+  return [
+    '以下信息来自用户主动授权后的实时定位与天气接口，可作为本轮回答的已知事实；不得把它扩展成未提供的田块或作物信息：',
+    `位置：${safeText(context.location, '地名未解析')}（坐标 ${latitude.toFixed(5)}, ${longitude.toFixed(5)}）`,
+    `当地时间：${safeText(context.localTime)}；时区：${safeText(context.timezone)}`,
+    `天气观测时间：${safeText(context.observedAt)}`,
+    `气温：${numberFact('temperature', '°C')}；体感：${numberFact('apparentTemperature', '°C')}；湿度：${numberFact('humidity', '%')}；降水：${numberFact('precipitation', ' mm')}；天气代码：${numberFact('weatherCode', '')}；风速：${numberFact('windSpeed', ' km/h')}；风向角：${numberFact('windDirection', '°')}`,
+  ].join('\n');
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>;
@@ -65,6 +88,7 @@ export async function POST(request: Request) {
 
     const endpoint = resolveEndpoint(provider, body.baseUrl);
     const messages = sanitizeMessages(body.messages);
+    const contextMessage = liveContextMessage(body.liveContext);
     const upstream = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -78,6 +102,7 @@ export async function POST(request: Request) {
             role: 'system',
             content: '你是“农心”，一名稳重、实用的农业生产助手。用简洁自然的中文回答，先给结论，再给可执行步骤。只能把用户在本次对话中明确提供的内容当作已知事实；绝不能擅自假设或编造用户的姓名、农场、地区、田块、作物、生育期、天气、传感器数据、病害诊断、政策或资料来源。信息不足时先说明缺少哪些信息并明确追问。涉及农药时提醒以当地登记标签和农技人员意见为准。',
           },
+          ...(contextMessage ? [{ role: 'system', content: contextMessage }] : []),
           ...messages,
         ],
         temperature: 0.35,

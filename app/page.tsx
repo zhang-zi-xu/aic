@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, LoaderCircle, Send, Settings2, Sprout } from 'lucide-react';
+import { Clock3, CloudSun, Eye, EyeOff, LocateFixed, LoaderCircle, MapPin, RefreshCw, Send, Settings2, Sprout } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 type ProviderId = 'deepseek' | 'openai' | 'siliconflow' | 'custom';
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
 type AiSettings = { provider: ProviderId; model: string; baseUrl: string; apiKey: string };
+type LiveContext = {
+  location: string | null;
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  locatedAt: number;
+  timezone: string;
+  timezoneAbbreviation: string | null;
+  observedAt: string | null;
+  weather: {
+    temperature: number | null;
+    apparentTemperature: number | null;
+    humidity: number | null;
+    precipitation: number | null;
+    weatherCode: number | null;
+    windSpeed: number | null;
+    windDirection: number | null;
+  };
+  sources: { weather: string; location: string | null };
+};
 
 const providerOptions: Record<ProviderId, { label: string; baseUrl: string; model: string }> = {
   deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash-vision-exp' },
@@ -25,6 +45,36 @@ const initialSettings: AiSettings = {
   apiKey: '',
 };
 
+function weatherText(code: number | null) {
+  if (code === null) return '天气状况未知';
+  if (code === 0) return '晴';
+  if ([1, 2].includes(code)) return '少云';
+  if (code === 3) return '阴';
+  if ([45, 48].includes(code)) return '雾';
+  if ([51, 53, 55, 56, 57].includes(code)) return '毛毛雨';
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '雨';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return '雪';
+  if ([95, 96, 99].includes(code)) return '雷暴';
+  return '天气代码 ' + code;
+}
+
+function formatLocalTime(date: Date, timezone: string) {
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: timezone,
+      month: '2-digit',
+      day: '2-digit',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date);
+  } catch {
+    return '';
+  }
+}
+
 export default function Home() {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -35,6 +85,10 @@ export default function Home() {
   const [settingsDraft, setSettingsDraft] = useState<AiSettings>(initialSettings);
   const [settingsError, setSettingsError] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [liveContext, setLiveContext] = useState<LiveContext | null>(null);
+  const [contextStatus, setContextStatus] = useState<'idle' | 'locating' | 'loading' | 'ready' | 'error'>('idle');
+  const [contextError, setContextError] = useState('');
+  const [clockNow, setClockNow] = useState(() => new Date());
   const conversationEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,6 +110,12 @@ export default function Home() {
     conversationEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, isSending]);
 
+  useEffect(() => {
+    if (!liveContext?.timezone) return;
+    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [liveContext?.timezone]);
+
   const changeProvider = (provider: ProviderId) => {
     const preset = providerOptions[provider];
     if (!preset) return;
@@ -72,6 +132,39 @@ export default function Home() {
     setSettingsError('');
     setSettingsOpen(false);
     setChatError('');
+  };
+
+  const loadLiveContext = () => {
+    if (!navigator.geolocation) {
+      setContextStatus('error');
+      setContextError('当前浏览器不支持定位。');
+      return;
+    }
+    setContextStatus('locating');
+    setContextError('');
+    navigator.geolocation.getCurrentPosition(async (position) => {
+      setContextStatus('loading');
+      const { latitude, longitude, accuracy } = position.coords;
+      try {
+        const response = await fetch(`/api/context?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`);
+        const data = await response.json() as Omit<LiveContext, 'accuracy' | 'locatedAt'> & { error?: string };
+        if (!response.ok || data.error) throw new Error(data.error || '实时信息获取失败。');
+        setLiveContext({ ...data, accuracy, locatedAt: position.timestamp });
+        setClockNow(new Date());
+        setContextStatus('ready');
+      } catch (error) {
+        setContextStatus('error');
+        setContextError(error instanceof Error ? error.message : '天气与位置查询失败。');
+      }
+    }, (error) => {
+      setContextStatus('error');
+      const reason = error.code === error.PERMISSION_DENIED
+        ? '定位权限被拒绝，请在浏览器地址栏中允许定位后重试。'
+        : error.code === error.TIMEOUT
+          ? '定位超时，请检查设备定位服务后重试。'
+          : '暂时无法获取当前位置。';
+      setContextError(reason);
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   };
 
   const submitQuestion = async () => {
@@ -101,6 +194,10 @@ export default function Home() {
           baseUrl: settings.baseUrl,
           apiKey: settings.apiKey,
           messages: history.map(({ role, content }) => ({ role, content })),
+          liveContext: liveContext ? {
+            ...liveContext,
+            localTime: formatLocalTime(clockNow, liveContext.timezone),
+          } : null,
         }),
       });
       const data = await response.json() as { reply?: string; error?: string };
@@ -162,8 +259,32 @@ export default function Home() {
       <section className="chat-workspace">
         <div className="chat-heading">
           <div><span className="eyebrow">新对话</span><h1>今天想问什么？</h1></div>
-          <span className="data-state">未接入田块数据</span>
+          <span className={`data-state ${liveContext ? 'connected' : ''}`}>{liveContext ? '实时环境已接入' : '未接入实时环境'}</span>
         </div>
+
+        <section className="context-panel" aria-label="实时环境信息">
+          <div className="context-item">
+            <span className="context-icon"><MapPin size={18} /></span>
+            <div><small>当前位置</small><b>{liveContext ? (liveContext.location || '已取得当前坐标') : '尚未定位'}</b><p>{liveContext ? `${liveContext.latitude.toFixed(4)}, ${liveContext.longitude.toFixed(4)} · 精度约 ±${Math.round(liveContext.accuracy)} 米` : '授权后仅用于本次位置与天气查询'}</p></div>
+          </div>
+          <div className="context-item">
+            <span className="context-icon"><CloudSun size={19} /></span>
+            <div><small>实时天气</small><b>{liveContext ? `${weatherText(liveContext.weather.weatherCode)} · ${liveContext.weather.temperature ?? '--'}°C` : '等待定位'}</b><p>{liveContext ? `湿度 ${liveContext.weather.humidity ?? '--'}% · 体感 ${liveContext.weather.apparentTemperature ?? '--'}°C · 风速 ${liveContext.weather.windSpeed ?? '--'} km/h` : '按当前位置获取，不使用默认城市'}</p></div>
+          </div>
+          <div className="context-item">
+            <span className="context-icon"><Clock3 size={18} /></span>
+            <div><small>当地时间</small><b>{liveContext ? formatLocalTime(clockNow, liveContext.timezone) : '等待定位'}</b><p>{liveContext ? `${liveContext.timezone}${liveContext.timezoneAbbreviation ? ` · ${liveContext.timezoneAbbreviation}` : ''}` : '定位后按所在地时区更新'}</p></div>
+          </div>
+          <button className="locate-button" onClick={loadLiveContext} disabled={contextStatus === 'locating' || contextStatus === 'loading'}>
+            {contextStatus === 'locating' || contextStatus === 'loading'
+              ? <><LoaderCircle size={17} className="spin" />{contextStatus === 'locating' ? '正在定位' : '正在获取天气'}</>
+              : liveContext
+                ? <><RefreshCw size={16} />刷新</>
+                : <><LocateFixed size={17} />获取实时信息</>}
+          </button>
+          {contextError && <p className="context-error">{contextError}</p>}
+          {liveContext && <p className="context-source">天气：{liveContext.sources.weather}{liveContext.sources.location ? ` · 地名：${liveContext.sources.location}` : ''} · 获取于 {new Date(liveContext.locatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</p>}
+        </section>
 
         <div className="conversation" aria-live="polite">
           <div className="assistant-row">
