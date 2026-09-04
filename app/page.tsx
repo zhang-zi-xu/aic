@@ -293,63 +293,70 @@ export default function Home() {
       <section className="chat-workspace">
         <div className="chat-heading">
           <div><span className="eyebrow">新对话</span><h1>今天想问什么？</h1></div>
-          <span className={`data-state ${liveContext ? 'connected' : ''}`}>{liveContext ? '实时环境已接入' : '未接入实时环境'}</span>
         </div>
 
-        <section className="context-panel" aria-label="实时环境信息">
-          <div className="context-item">
-            <span className="context-icon"><MapPin size={18} /></span>
-            <div><small>{liveContext?.method === 'manual' ? '手动位置' : '当前位置'}</small><b>{liveContext ? (liveContext.location || '已取得当前坐标') : '尚未定位'}</b><p>{liveContext ? (liveContext.method === 'device' ? `${liveContext.latitude.toFixed(4)}, ${liveContext.longitude.toFixed(4)} · 精度约 ±${Math.round(liveContext.accuracy)} 米` : '根据你输入的城市查询，不代表设备精确位置') : '授权后仅用于本次位置与天气查询'}</p></div>
-          </div>
-          <div className="context-item">
-            <span className="context-icon"><CloudSun size={19} /></span>
-            <div><small>实时天气</small><b>{liveContext ? `${weatherText(liveContext.weather.weatherCode)} · ${liveContext.weather.temperature ?? '--'}°C` : '等待定位'}</b><p>{liveContext ? weatherDetails(liveContext.weather) : '按当前位置获取，不使用默认城市'}</p></div>
-          </div>
-          <div className="context-item">
-            <span className="context-icon"><Clock3 size={18} /></span>
-            <div><small>当地时间</small><b>{liveContext ? formatLocalTime(clockNow, liveContext.timezone) : '等待定位'}</b><p>{liveContext ? `${liveContext.timezone}${liveContext.timezoneAbbreviation ? ` · ${liveContext.timezoneAbbreviation}` : ''}` : '定位后按所在地时区更新'}</p></div>
-          </div>
-          <button className="locate-button" onClick={loadLiveContext} disabled={contextStatus === 'locating' || contextStatus === 'loading'}>
-            {contextStatus === 'locating' || contextStatus === 'loading'
-              ? <><LoaderCircle size={17} className="spin" />{contextStatus === 'locating' ? '正在定位' : '正在获取天气'}</>
-              : liveContext
-                ? <><RefreshCw size={16} />刷新</>
-                : <><LocateFixed size={17} />获取实时信息</>}
-          </button>
-          {contextError && <p className="context-error">{contextError}</p>}
-          {manualLocationOpen && <div className="manual-location"><label htmlFor="manual-city">手动输入城市</label><Input id="manual-city" value={manualCity} onChange={(event) => setManualCity(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadManualLocation(); }} placeholder="例如：杭州市余杭区" autoComplete="address-level2" /><button onClick={() => void loadManualLocation()} disabled={!manualCity.trim() || contextStatus === 'loading'}>查询</button></div>}
-          {!manualLocationOpen && !liveContext && <button className="manual-toggle" onClick={() => setManualLocationOpen(true)}>无法自动定位？手动输入城市</button>}
-          {liveContext && <p className="context-source">{liveContext.method === 'device' ? '设备定位' : '手动城市'} · 天气：{liveContext.sources.weather}{liveContext.sources.location ? ` · 地名：${liveContext.sources.location}` : ''} · 获取于 {new Date(liveContext.locatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</p>}
-        </section>
+        <div className="workspace-grid">
+          <aside className="context-panel" aria-label="实时环境信息">
+            <div className="context-panel-head">
+              <span>实时环境</span>
+              <span className={`data-state ${liveContext ? 'connected' : ''}`}>{liveContext ? '已接入' : '未接入'}</span>
+            </div>
+            <div className="context-item">
+              <span className="context-icon"><MapPin size={16} /></span>
+              <div><small>{liveContext?.method === 'manual' ? '手动位置' : '当前位置'}</small><b>{liveContext ? (liveContext.location || '已取得当前坐标') : '尚未定位'}</b><p>{liveContext ? (liveContext.method === 'device' ? `精度约 ±${Math.round(liveContext.accuracy)} 米` : '依据输入地区查询') : '仅用于本次查询'}</p></div>
+            </div>
+            <div className="context-item">
+              <span className="context-icon"><CloudSun size={17} /></span>
+              <div><small>实时天气</small><b>{liveContext ? `${weatherText(liveContext.weather.weatherCode)} · ${liveContext.weather.temperature ?? '--'}°C` : '等待定位'}</b><p>{liveContext ? weatherDetails(liveContext.weather) : '不使用默认城市'}</p></div>
+            </div>
+            <div className="context-item">
+              <span className="context-icon"><Clock3 size={16} /></span>
+              <div><small>当地时间</small><b>{liveContext ? formatLocalTime(clockNow, liveContext.timezone) : '等待定位'}</b><p>{liveContext ? liveContext.timezone : '按所在地更新'}</p></div>
+            </div>
+            <button className="locate-button" onClick={loadLiveContext} disabled={contextStatus === 'locating' || contextStatus === 'loading'}>
+              {contextStatus === 'locating' || contextStatus === 'loading'
+                ? <><LoaderCircle size={16} className="spin" />{contextStatus === 'locating' ? '正在定位' : '正在获取天气'}</>
+                : liveContext
+                  ? <><RefreshCw size={15} />刷新环境</>
+                  : <><LocateFixed size={16} />获取实时信息</>}
+            </button>
+            {contextError && <p className="context-error">{contextError}</p>}
+            {manualLocationOpen && <div className="manual-location"><label htmlFor="manual-city">手动输入城市</label><Input id="manual-city" value={manualCity} onChange={(event) => setManualCity(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadManualLocation(); }} placeholder="例如：杭州市余杭区" autoComplete="address-level2" /><button onClick={() => void loadManualLocation()} disabled={!manualCity.trim() || contextStatus === 'loading'}>查询</button></div>}
+            {!manualLocationOpen && !liveContext && <button className="manual-toggle" onClick={() => setManualLocationOpen(true)}>手动输入城市</button>}
+            {liveContext && <p className="context-source">{liveContext.sources.weather} · {new Date(liveContext.locatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</p>}
+          </aside>
 
-        <div className="conversation" aria-live="polite">
-          <div className="assistant-row">
-            <span className="bot-seal">农心</span>
-            <div className="message-block">
-              <div className="speaker"><b>农心助手</b><span>{providerOptions[settings.provider].label} · {settings.model}</span></div>
-              <div className="answer-card intro-card">
-                <p>你好。请直接描述你的问题。</p>
-                <p>如果问题与具体田块有关，请告诉我作物、所在地区、生育阶段和你观察到的现象。没有提供的信息，我不会自行假设。</p>
+          <div className="chat-column">
+            <div className="conversation" aria-live="polite">
+              <div className="assistant-row">
+                <span className="bot-seal">农心</span>
+                <div className="message-block">
+                  <div className="speaker"><b>农心助手</b><span>{providerOptions[settings.provider].label} · {settings.model}</span></div>
+                  <div className="answer-card intro-card">
+                    <p>你好。请直接描述你的问题。</p>
+                    <p>如果问题与具体田块有关，请告诉我作物、所在地区、生育阶段和你观察到的现象。没有提供的信息，我不会自行假设。</p>
+                  </div>
+                  {messages.map((message) => message.role === 'user'
+                    ? <div className="user-message" key={message.id}>{message.content}</div>
+                    : <div className="answer-card chat-answer" key={message.id}>{message.content}</div>)}
+                  {isSending && <div className="answer-card loading-answer"><LoaderCircle size={17} className="spin" />正在回答...</div>}
+                  {chatError && <div className="chat-error"><span>{chatError}</span><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>检查设置</button></div>}
+                  <div ref={conversationEnd} />
+                </div>
               </div>
-              {messages.map((message) => message.role === 'user'
-                ? <div className="user-message" key={message.id}>{message.content}</div>
-                : <div className="answer-card chat-answer" key={message.id}>{message.content}</div>)}
-              {isSending && <div className="answer-card loading-answer"><LoaderCircle size={17} className="spin" />正在回答...</div>}
-              {chatError && <div className="chat-error"><span>{chatError}</span><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>检查设置</button></div>}
-              <div ref={conversationEnd} />
             </div>
-          </div>
-        </div>
 
-        <div className="composer-wrap">
-          <div className="composer">
-            <textarea value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitQuestion(); } }} aria-label="向农心提问" placeholder="输入问题，Enter 发送，Shift + Enter 换行" />
-            <div className="composer-tools">
-              <span className="composer-model">{providerOptions[settings.provider].label} · {settings.model}</span>
-              <button onClick={() => void submitQuestion()} disabled={isSending || !query.trim()} className="send-button" aria-label="发送">{isSending ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />}</button>
+            <div className="composer-wrap">
+              <div className="composer">
+                <textarea value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submitQuestion(); } }} aria-label="向农心提问" placeholder="输入问题，Enter 发送，Shift + Enter 换行" />
+                <div className="composer-tools">
+                  <span className="composer-model">{providerOptions[settings.provider].label} · {settings.model}</span>
+                  <button onClick={() => void submitQuestion()} disabled={isSending || !query.trim()} className="send-button" aria-label="发送">{isSending ? <LoaderCircle size={18} className="spin" /> : <Send size={18} />}</button>
+                </div>
+              </div>
+              <div className="composer-foot"><p>回答仅基于你提供的信息；重要农事请结合现场核实。</p><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>切换模型</button></div>
             </div>
           </div>
-          <div className="composer-foot"><p>回答仅基于你提供的信息；重要农事请结合现场核实。</p><button onClick={() => { setSettingsDraft(settings); setSettingsOpen(true); }}>切换模型</button></div>
         </div>
       </section>
     </main>
