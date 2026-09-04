@@ -37,3 +37,6 @@ next-env.d.ts
 /outputs/
 /work/
 /.tmp-brief/
+/.smoke-out/
+*.tsbuildinfo
+.page-stage.txt
