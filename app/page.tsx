@@ -76,6 +76,14 @@ function formatLocalTime(date: Date, timezone: string) {
   }
 }
 
+function weatherDetails(weather: LiveContext['weather']) {
+  const parts: string[] = [];
+  if (weather.humidity !== null) parts.push(`湿度 ${weather.humidity}%`);
+  if (weather.apparentTemperature !== null) parts.push(`体感 ${weather.apparentTemperature}°C`);
+  if (weather.windSpeed !== null) parts.push(`风速 ${weather.windSpeed} km/h`);
+  return parts.join(' · ') || '暂无更多实测数据';
+}
+
 export default function Home() {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -295,7 +303,7 @@ export default function Home() {
           </div>
           <div className="context-item">
             <span className="context-icon"><CloudSun size={19} /></span>
-            <div><small>实时天气</small><b>{liveContext ? `${weatherText(liveContext.weather.weatherCode)} · ${liveContext.weather.temperature ?? '--'}°C` : '等待定位'}</b><p>{liveContext ? `湿度 ${liveContext.weather.humidity ?? '--'}% · 体感 ${liveContext.weather.apparentTemperature ?? '--'}°C · 风速 ${liveContext.weather.windSpeed ?? '--'} km/h` : '按当前位置获取，不使用默认城市'}</p></div>
+            <div><small>实时天气</small><b>{liveContext ? `${weatherText(liveContext.weather.weatherCode)} · ${liveContext.weather.temperature ?? '--'}°C` : '等待定位'}</b><p>{liveContext ? weatherDetails(liveContext.weather) : '按当前位置获取，不使用默认城市'}</p></div>
           </div>
           <div className="context-item">
             <span className="context-icon"><Clock3 size={18} /></span>
