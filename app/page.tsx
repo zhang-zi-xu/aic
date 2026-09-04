@@ -11,6 +11,7 @@ type ProviderId = 'deepseek' | 'openai' | 'siliconflow' | 'custom';
 type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string };
 type AiSettings = { provider: ProviderId; model: string; baseUrl: string; apiKey: string };
 type LiveContext = {
+  method: 'device' | 'manual';
   location: string | null;
   latitude: number;
   longitude: number;
@@ -89,6 +90,8 @@ export default function Home() {
   const [contextStatus, setContextStatus] = useState<'idle' | 'locating' | 'loading' | 'ready' | 'error'>('idle');
   const [contextError, setContextError] = useState('');
   const [clockNow, setClockNow] = useState(() => new Date());
+  const [manualLocationOpen, setManualLocationOpen] = useState(false);
+  const [manualCity, setManualCity] = useState('');
   const conversationEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -134,10 +137,20 @@ export default function Home() {
     setChatError('');
   };
 
+  const acceptContextResponse = async (response: Response, details: { method: 'device' | 'manual'; accuracy: number; locatedAt: number }) => {
+    const data = await response.json() as Omit<LiveContext, 'method' | 'accuracy' | 'locatedAt'> & { error?: string };
+    if (!response.ok || data.error) throw new Error(data.error || '实时信息获取失败。');
+    setLiveContext({ ...data, ...details });
+    setClockNow(new Date());
+    setContextStatus('ready');
+    setContextError('');
+  };
+
   const loadLiveContext = () => {
     if (!navigator.geolocation) {
       setContextStatus('error');
-      setContextError('当前浏览器不支持定位。');
+      setContextError('当前浏览器不支持自动定位，请手动输入城市。');
+      setManualLocationOpen(true);
       return;
     }
     setContextStatus('locating');
@@ -147,24 +160,37 @@ export default function Home() {
       const { latitude, longitude, accuracy } = position.coords;
       try {
         const response = await fetch(`/api/context?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`);
-        const data = await response.json() as Omit<LiveContext, 'accuracy' | 'locatedAt'> & { error?: string };
-        if (!response.ok || data.error) throw new Error(data.error || '实时信息获取失败。');
-        setLiveContext({ ...data, accuracy, locatedAt: position.timestamp });
-        setClockNow(new Date());
-        setContextStatus('ready');
+        await acceptContextResponse(response, { method: 'device', accuracy, locatedAt: position.timestamp });
       } catch (error) {
         setContextStatus('error');
         setContextError(error instanceof Error ? error.message : '天气与位置查询失败。');
+        setManualLocationOpen(true);
       }
     }, (error) => {
       setContextStatus('error');
       const reason = error.code === error.PERMISSION_DENIED
-        ? '定位权限被拒绝，请在浏览器地址栏中允许定位后重试。'
+        ? '定位权限被拒绝，可允许定位后重试，或手动输入城市。'
         : error.code === error.TIMEOUT
-          ? '定位超时，请检查设备定位服务后重试。'
-          : '暂时无法获取当前位置。';
+          ? '自动定位超时，请重试或手动输入城市。'
+          : '暂时无法自动定位，请手动输入城市。';
       setContextError(reason);
-    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+      setManualLocationOpen(true);
+    }, { enableHighAccuracy: false, timeout: 20000, maximumAge: 300000 });
+  };
+
+  const loadManualLocation = async () => {
+    const city = manualCity.trim();
+    if (!city || contextStatus === 'loading') return;
+    setContextStatus('loading');
+    setContextError('');
+    try {
+      const response = await fetch(`/api/context?city=${encodeURIComponent(city)}`);
+      await acceptContextResponse(response, { method: 'manual', accuracy: 0, locatedAt: Date.now() });
+      setManualLocationOpen(false);
+    } catch (error) {
+      setContextStatus('error');
+      setContextError(error instanceof Error ? error.message : '城市天气查询失败。');
+    }
   };
 
   const submitQuestion = async () => {
@@ -265,7 +291,7 @@ export default function Home() {
         <section className="context-panel" aria-label="实时环境信息">
           <div className="context-item">
             <span className="context-icon"><MapPin size={18} /></span>
-            <div><small>当前位置</small><b>{liveContext ? (liveContext.location || '已取得当前坐标') : '尚未定位'}</b><p>{liveContext ? `${liveContext.latitude.toFixed(4)}, ${liveContext.longitude.toFixed(4)} · 精度约 ±${Math.round(liveContext.accuracy)} 米` : '授权后仅用于本次位置与天气查询'}</p></div>
+            <div><small>{liveContext?.method === 'manual' ? '手动位置' : '当前位置'}</small><b>{liveContext ? (liveContext.location || '已取得当前坐标') : '尚未定位'}</b><p>{liveContext ? (liveContext.method === 'device' ? `${liveContext.latitude.toFixed(4)}, ${liveContext.longitude.toFixed(4)} · 精度约 ±${Math.round(liveContext.accuracy)} 米` : '根据你输入的城市查询，不代表设备精确位置') : '授权后仅用于本次位置与天气查询'}</p></div>
           </div>
           <div className="context-item">
             <span className="context-icon"><CloudSun size={19} /></span>
@@ -283,7 +309,9 @@ export default function Home() {
                 : <><LocateFixed size={17} />获取实时信息</>}
           </button>
           {contextError && <p className="context-error">{contextError}</p>}
-          {liveContext && <p className="context-source">天气：{liveContext.sources.weather}{liveContext.sources.location ? ` · 地名：${liveContext.sources.location}` : ''} · 获取于 {new Date(liveContext.locatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</p>}
+          {manualLocationOpen && <div className="manual-location"><label htmlFor="manual-city">手动输入城市</label><Input id="manual-city" value={manualCity} onChange={(event) => setManualCity(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void loadManualLocation(); }} placeholder="例如：杭州市余杭区" autoComplete="address-level2" /><button onClick={() => void loadManualLocation()} disabled={!manualCity.trim() || contextStatus === 'loading'}>查询</button></div>}
+          {!manualLocationOpen && !liveContext && <button className="manual-toggle" onClick={() => setManualLocationOpen(true)}>无法自动定位？手动输入城市</button>}
+          {liveContext && <p className="context-source">{liveContext.method === 'device' ? '设备定位' : '手动城市'} · 天气：{liveContext.sources.weather}{liveContext.sources.location ? ` · 地名：${liveContext.sources.location}` : ''} · 获取于 {new Date(liveContext.locatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</p>}
         </section>
 
         <div className="conversation" aria-live="polite">

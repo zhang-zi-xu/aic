@@ -15,7 +15,10 @@ type WeatherResponse = {
 };
 
 type ReverseResponse = {
-  features?: Array<{ properties?: Record<string, unknown> }>;
+  features?: Array<{
+    properties?: Record<string, unknown>;
+    geometry?: { coordinates?: unknown };
+  }>;
 };
 
 function numberValue(value: unknown) {
@@ -37,12 +40,40 @@ function locationName(data: ReverseResponse | null) {
   return parts.length ? parts.join(' · ') : null;
 }
 
+async function geocodeCity(city: string) {
+  const geocodeUrl = new URL('https://photon.komoot.io/api');
+  geocodeUrl.searchParams.set('q', city);
+  geocodeUrl.searchParams.set('limit', '1');
+  const response = await fetch(geocodeUrl, { headers: { Accept: 'application/json', 'User-Agent': 'NongxinAgent/1.0' } });
+  if (!response.ok) throw new Error('城市查询服务暂时不可用');
+  const data = await response.json() as ReverseResponse;
+  const coordinates = data.features?.[0]?.geometry?.coordinates;
+  if (!Array.isArray(coordinates) || coordinates.length < 2) throw new Error(`找不到“${city}”，请填写更完整的城市名称`);
+  const longitude = Number(coordinates[0]);
+  const latitude = Number(coordinates[1]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error('城市坐标无效');
+  return { latitude, longitude, name: locationName(data) || city };
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const latitude = Number(url.searchParams.get('lat'));
-  const longitude = Number(url.searchParams.get('lon'));
-  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-    return Response.json({ error: '定位坐标无效' }, { status: 400 });
+  const latitudeParam = url.searchParams.get('lat');
+  const longitudeParam = url.searchParams.get('lon');
+  let latitude = Number(latitudeParam);
+  let longitude = Number(longitudeParam);
+  let locationHint: string | null = null;
+  const city = url.searchParams.get('city')?.trim().slice(0, 80) || '';
+  const validCoordinates = latitudeParam !== null && longitudeParam !== null && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  if (!validCoordinates) {
+    if (!city) return Response.json({ error: '请提供定位坐标或城市名称' }, { status: 400 });
+    try {
+      const geocoded = await geocodeCity(city);
+      latitude = geocoded.latitude;
+      longitude = geocoded.longitude;
+      locationHint = geocoded.name;
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : '城市查询失败' }, { status: 502 });
+    }
   }
 
   const lat = latitude.toFixed(5);
@@ -82,7 +113,7 @@ export async function GET(request: Request) {
     }
 
     return Response.json({
-      location: locationName(reverse),
+      location: locationName(reverse) || locationHint,
       latitude,
       longitude,
       timezone: textValue(weather.timezone) || 'UTC',
