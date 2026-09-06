@@ -1,0 +1,30 @@
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: 8080
+  compression:
+    enabled: true
+
+spring:
+  web:
+    resources:
+      add-mappings: false
+  application:
+    name: nongxin-agent
+  datasource:
+    url: jdbc:sqlite:./data/nongxin.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  jackson:
+    default-property-inclusion: non_null
+
+nongxin:
+  # 数据文件（jar 内资源）
+  cities-resource: classpath:cities.csv
+  kb-resource: classpath:kb.json
+  # Agent 循环上限（同 yoked MAX_FC_ROUNDS）
+  agent-max-rounds: 5
+  # 天气服务超时（毫秒）
+  weather-timeout-ms: 8000
