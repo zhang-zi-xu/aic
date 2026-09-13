@@ -20,7 +20,7 @@ export function ContextPanel({ context, now, busy, error, onLocate, onSearch, on
       {context.weatherError && <p role="status" className="nx-weather-error">{context.weatherError}</p>}
       {context.daily.length > 0 && <button className="nx-text-button" onClick={() => setDays(!days)}>{days ? '收起预报' : '查看未来天气'} →</button>}
       {days && <div className="nx-weather-days">{context.daily.map(day => <div key={day.date}><span>{day.date.slice(5)}</span><span>{weatherLabel(day.weatherCode)}</span><b>{number(day.tempMin, '')} / {number(day.tempMax, '°')}</b></div>)}</div>}
-    </> : <div className="nx-weather-empty"><p>还未选择位置</p><button onClick={() => setExpanded(true)}>选择城市，获取真实天气 →</button></div>}
+    </> : <div className="nx-weather-empty"><p>还未选择位置</p><button onClick={() => setExpanded(true)}>选择城市，获取真实天气 →</button><button type="button" disabled={busy} onClick={onLocate}><LocateFixed size={13} />{busy ? '正在定位…' : '使用当前位置'}</button></div>}
     {expanded && <form className="nx-weather-form" onSubmit={e => { e.preventDefault(); if (city.trim()) onSearch(city.trim()); }}>
       <label className="sr-only" htmlFor="weather-city">天气城市</label><div><input id="weather-city" value={city} maxLength={80} placeholder="城市，例如：杭州市" onChange={e => setCity(e.target.value)} /><button type="submit" disabled={busy || !city.trim()} aria-label="查询天气"><RefreshCw size={15} className={busy ? 'spin' : ''} /></button></div>
       <button type="button" disabled={busy} className="nx-text-button" onClick={onLocate}><LocateFixed size={13} />{busy ? '正在获取…' : '使用设备位置'}</button>

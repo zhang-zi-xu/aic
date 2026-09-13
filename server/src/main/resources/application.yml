@@ -8,6 +8,11 @@ spring:
   web:
     resources:
       add-mappings: false
+  servlet:
+    multipart:
+      # 图片附件走 multipart；单张上限与 UploadService 的校验保持一致
+      max-file-size: 10MB
+      max-request-size: 12MB
   application:
     name: nongxin-agent
   datasource:
@@ -20,11 +25,58 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+# 日志同时写文件：便于事后核对"模型是否按预期调用工具"，不影响启动方式
+logging:
+  file:
+    name: ./data/nongxin.log
+  logback:
+    rollingpolicy:
+      max-file-size: 5MB
+      max-history: 5
+
 nongxin:
   # 数据文件（jar 内资源）
   cities-resource: classpath:cities.csv
   kb-resource: classpath:kb.json
+  # 已核验来源登记（文档 + 原文片段）
+  sources-resource: classpath:knowledge/sources.json
   # Agent 循环上限（同 yoked MAX_FC_ROUNDS）
   agent-max-rounds: 5
   # 天气服务超时（毫秒）
   weather-timeout-ms: 8000
+  # 图片附件：原图存磁盘（重编码去 EXIF），库里只登记元数据；
+  # 超过保留期且没有被任何会话引用的会被清理，不把 base64 写进聊天文本字段
+  upload-dir: ${NONGXIN_UPLOAD_DIR:./data/uploads}
+  upload-max-bytes: ${NONGXIN_UPLOAD_MAX_BYTES:8388608}
+  upload-retention-days: ${NONGXIN_UPLOAD_RETENTION_DAYS:7}
+  # RAG 向量检索（混合检索的第二路召回；未配置 key 时自动降级为纯关键词）
+  embedding:
+    # mode: remote = 远程 embedding 模型（正式使用）；local = 本地哈希向量（离线兜底/链路自检）
+    mode: ${NONGXIN_EMBEDDING_MODE:remote}
+    endpoint: ${NONGXIN_EMBEDDING_ENDPOINT:https://api.siliconflow.cn/v1/embeddings}
+    model: ${NONGXIN_EMBEDDING_MODEL:BAAI/bge-m3}
+    api-key: ${NONGXIN_EMBEDDING_KEY:}
+    batch-size: 16
+    timeout-ms: 20000
+  # 混合检索融合参数（RRF：score = Σ 1/(k + rank)）
+  retrieval:
+    rrf-k: 60
+    vector-top-k: 12
+    keyword-top-k: 12
+    graph-top-k: 8
+
+  # 服务端演示 Key（面向不懂配置的农户/评委：前端不填 Key 时自动兜底）
+  # 留空则不启用兜底，行为与"用户自带 Key"完全一致
+  chat:
+    default-api-key: ${NONGXIN_CHAT_KEY:}
+    default-provider: ${NONGXIN_CHAT_PROVIDER:deepseek}
+    default-model: ${NONGXIN_CHAT_MODEL:deepseek-chat}
+  # 成本护栏：只对"使用服务端 Key"的请求计数，用户自带 Key 不受限
+  usage:
+    enabled: ${NONGXIN_USAGE_LIMIT:true}
+    daily-per-ip: ${NONGXIN_USAGE_PER_IP:30}
+    daily-global: ${NONGXIN_USAGE_GLOBAL:500}
+  # 答案缓存（同问 + 同田块上下文复用，降低调用成本；含天气的请求不缓存）
+  cache:
+    enabled: ${NONGXIN_CACHE:true}
+    ttl-hours: ${NONGXIN_CACHE_TTL_HOURS:24}

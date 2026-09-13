@@ -12,6 +12,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 
 import java.net.SocketTimeoutException;
+import java.io.IOException;
 import java.net.http.HttpTimeoutException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -73,6 +74,10 @@ public class AgentRunner {
 
     /** 运行 Agent；供应商错误使用不含密钥、原始响应或内部地址的稳定错误信息。 */
     public AgentResult run(Config config, List<Map<String, Object>> history) {
+        return run(config, history, null);
+    }
+
+    public AgentResult run(Config config, List<Map<String, Object>> history, StreamObserver stream) {
         String model = config.model();
         String endpoint = config.endpoint();
         String apiKey = config.apiKey();
@@ -91,6 +96,11 @@ public class AgentRunner {
         long startedAt = System.nanoTime();
 
         while (rounds < maxRounds) {
+            if (stream != null) {
+                stream.check();
+                stream.event("reset", Map.of());
+                stream.event("status", Map.of("text", rounds == 0 ? "正在连接模型…" : "正在结合工具结果整理回答…"));
+            }
             if (System.nanoTime() - startedAt >= MAX_RUN_NANOS) {
                 if (!submissions.isEmpty()) {
                     return new AgentResult("本次对话处理超时，已生成的工具结果保留在下方。", submissions, rounds, true);
@@ -121,7 +131,7 @@ public class AgentRunner {
 
             Map<?, ?> message;
             try {
-                message = requestCompletion(endpoint, apiKey, body);
+                message = stream == null ? requestCompletion(endpoint, apiKey, body) : requestStream(endpoint, apiKey, body, stream);
             } catch (ProviderException e) {
                 if (!submissions.isEmpty()) {
                     return new AgentResult(e.getMessage() + "。已生成的工具结果保留在下方。", submissions, rounds + 1, true);
@@ -145,6 +155,7 @@ public class AgentRunner {
             messages.add(assistantMsg);
 
             for (Map<String, Object> tc : toolCalls) {
+                if (stream != null) { stream.check(); stream.event("status", Map.of("text", "正在核对资料与整理信息…")); }
                 Map<?, ?> function = (Map<?, ?>) tc.get("function");
                 String name = (String) function.get("name");
                 String resultText;
@@ -154,6 +165,8 @@ public class AgentRunner {
                     resultText = config.tools().execute(name, args, config.ctx());
                     boolean failed = resultText == null || resultText.startsWith("工具执行失败") || resultText.startsWith("错误：");
                     if (failed) {
+                        // 记录到日志：便于事后判断"模型是否按预期调用工具"，而不必靠猜
+                        log.warn("工具未成功执行：{}｜{}", name, brief(resultText));
                         resultText = "工具未成功执行，请检查参数并补充必要信息后重试。";
                     } else if (SUBMISSION_TOOLS.contains(name)) {
                         Object computedResult = config.ctx().extra(SUBMISSION_RESULT_KEY);
@@ -166,6 +179,7 @@ public class AgentRunner {
                         }
                     }
                 } catch (IllegalArgumentException e) {
+                    log.warn("工具参数无效：{}｜{}", name, brief(e.getMessage()));
                     resultText = "工具参数格式不正确，请按工具定义提供 JSON 对象。";
                 }
                 messages.add(Map.of("role", "tool", "tool_call_id", tc.get("id"), "content", resultText.length() > 8000 ? resultText.substring(0, 8000) : resultText));
@@ -177,6 +191,56 @@ public class AgentRunner {
                 ? "工具调用轮次已用尽，请简化问题后重试。"
                 : "工具调用轮次已用尽，已为你整理出上方结构化结果，可继续追问。";
         return new AgentResult(fallback, submissions, rounds, true);
+    }
+
+    private Map<?, ?> requestStream(String endpoint, String apiKey, Map<String, Object> body, StreamObserver stream) {
+        body.put("stream", true);
+        try {
+            return restClient.post().uri(endpoint).header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json").header("Accept", "text/event-stream")
+                    .body(body).exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        if (status != 200) {
+                            String detail = switch (status) {
+                                case 401, 403 -> "供应商鉴权失败，请检查 API 密钥与模型权限";
+                                case 429 -> "供应商请求额度或频率受限，请稍后重试";
+                                case 400, 404 -> "供应商不接受流式请求，请检查模型、API 地址及流式工具调用支持";
+                                default -> "对话供应商暂时不可用，请稍后重试";
+                            };
+                            throw new ProviderException(detail, status == 408 || status == 504);
+                        }
+                        stream.check();
+                        // Some compatible gateways ignore stream=true and return a normal JSON response.
+                        // Accept that single response; never silently issue a second billable request.
+                        var type = response.getHeaders().getContentType();
+                        if (type != null && type.isCompatibleWith(org.springframework.http.MediaType.APPLICATION_JSON)) {
+                            byte[] bytes = response.getBody().readNBytes(2_000_001);
+                            if (bytes.length > 2_000_000) throw new ProviderException("供应商响应过长", false);
+                            var data = objectMapper.readTree(bytes);
+                            var choice = data.path("choices").path(0);
+                            String finish = choice.path("finish_reason").asText("");
+                            if (!finish.isEmpty() && !finish.equals("stop") && !finish.equals("tool_calls"))
+                                throw new ProviderException("供应商未完成回答，请简化问题后重试", false);
+                            if (!choice.path("message").isObject()) throw new ProviderException("供应商没有返回有效的回答", false);
+                            stream.check();
+                            stream.event("status", Map.of("text", "供应商返回了完整结果（未采用流式输出）"));
+                            return objectMapper.convertValue(choice.get("message"), Map.class);
+                        }
+                        return new CompletionStream(objectMapper, stream).read(response.getBody());
+                    });
+        } catch (ResourceAccessException e) {
+            stream.check();
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof SocketTimeoutException || cause instanceof HttpTimeoutException)
+                    throw new ProviderException("连接对话供应商超时，请稍后重试", true);
+            }
+            throw new ProviderException("回答连接中断，请检查网络或稍后重试", false);
+        } catch (RestClientException e) {
+            stream.check();
+            throw new ProviderException("供应商流式响应无法处理，请检查接口兼容性或稍后重试", false);
+        } catch (IllegalArgumentException e) {
+            throw new ProviderException("供应商请求配置或响应无效，请检查模型设置", false);
+        }
     }
 
     private Map<?, ?> requestCompletion(String endpoint, String apiKey, Map<String, Object> body) {
@@ -240,8 +304,14 @@ public class AgentRunner {
         return out;
     }
 
-    private Map<String, Object> parseArgs(String json) {
-        try {
+    /** 日志用的短文本：只保留长度，不把整段工具输出写进日志。 */
+    private static String brief(String text) {
+        if (text == null) return "null";
+        String oneLine = text.replaceAll("\\s+", " ").strip();
+        return oneLine.length() <= 120 ? oneLine : oneLine.substring(0, 120) + "…";
+    }
+
+    private Map<String, Object> parseArgs(String json) {        try {
             var node = objectMapper.readTree(json);
             if (node == null || !node.isObject()) throw new IllegalArgumentException("参数必须为对象");
             return objectMapper.convertValue(node, new TypeReference<>() {});

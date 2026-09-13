@@ -1,0 +1,1 @@
+9999 busy? errorlevel=1  (0=busy - would SKIP, 1=free - would START)

@@ -16,6 +16,9 @@ export default defineConfig({
   server: {
     port: 3000,
     strictPort: true,
+    // Editors and tooling leave atomic-replace temp dirs (".<name>.<pid>.<uuid>.tmpdir") in src/;
+    // watching them crashes the dev server with EBUSY on Windows.
+    watch: { ignored: ['**/.*.tmpdir/**', '**/.*.tmp'] },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8080',

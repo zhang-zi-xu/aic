@@ -1,6 +1,6 @@
 import type { ChatMessage, LiveContext } from '@/types';
 export type Conversation = { id: string; title: string; fieldId: string | null; messages: ChatMessage[]; createdAt: string };
-export type AiSettings = { provider: string; model: string; baseUrl: string; apiKey: string };
+export type AiSettings = { provider: string; model: string; baseUrl: string; apiKey: string; vision?: 'auto' | 'on' | 'off' };
 export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },

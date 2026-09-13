@@ -21,6 +21,23 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(Map.of("error", exception.getMessage()));
     }
 
+    /** 状态冲突：例如任务没提交执行记录就想标成"已执行待复查"。 */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<?> stateConflict(IllegalStateException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", exception.getMessage()));
+    }
+
+    /** 找不到对象：例如引用了已被清理的图片附件。 */
+    @ExceptionHandler(java.util.NoSuchElementException.class)
+    public ResponseEntity<?> missing(java.util.NoSuchElementException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ChatStreams.Overloaded.class)
+    public ResponseEntity<?> overloaded() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("error", "当前对话请求较多，请稍后重试"));
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<?> malformed() {
         return ResponseEntity.badRequest().body(Map.of("error", "请求内容格式不正确，请检查字段类型"));

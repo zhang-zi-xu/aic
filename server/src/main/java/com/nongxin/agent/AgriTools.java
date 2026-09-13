@@ -1,16 +1,22 @@
 package com.nongxin.agent;
 
+import com.nongxin.model.FarmTask;
 import com.nongxin.model.FieldProfile;
 import com.nongxin.model.PhenologyResult;
 import com.nongxin.model.RiskReport;
-import com.nongxin.service.KnowledgeService;
+import com.nongxin.model.TaskRecord;
+import com.nongxin.service.KnowledgeLibrary;
 import com.nongxin.service.PhenologyService;
 import com.nongxin.service.RiskService;
+import com.nongxin.service.TaskService;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 农心农业工具集：知识检索 / 田块档案 / 天气预报 / 风险判定 / 处方单 / 确认清单。
@@ -19,14 +25,22 @@ import java.util.Map;
 @Component
 public class AgriTools {
 
-    private final KnowledgeService knowledge;
+    /** 本次请求检索命中的片段 ID；处方依据只能从这个集合里取。 */
+    public static final String RETRIEVED_CHUNKS = "retrievedChunks";
+
+    private final KnowledgeLibrary knowledge;
     private final PhenologyService phenology;
     private final RiskService risk;
+    private final TaskService tasks;
+    private final com.nongxin.service.UploadService uploads;
 
-    public AgriTools(KnowledgeService knowledge, PhenologyService phenology, RiskService risk) {
+    public AgriTools(KnowledgeLibrary knowledge, PhenologyService phenology, RiskService risk, TaskService tasks,
+                     com.nongxin.service.UploadService uploads) {
         this.knowledge = knowledge;
         this.phenology = phenology;
         this.risk = risk;
+        this.tasks = tasks;
+        this.uploads = uploads;
     }
 
     public ToolRegistry buildRegistry() {
@@ -60,24 +74,46 @@ public class AgriTools {
                     if (field.notes() != null && !field.notes().isBlank()) {
                         sb.append("备注：").append(field.notes()).append('\n');
                     }
+                    sb.append(taskContext(field));
+                    sb.append(photoContext(field));
                     return sb.toString();
                 }));
 
         // ---- 知识检索 ----
         registry.register(ToolDefinition.of("search_agri_knowledge",
-                "在本地农业知识库检索病虫害防治、水肥调控、农时操作等整理条目（来源待核验）。" +
-                        "涉及病害/虫害识别与防治、施肥浇水、农时操作时必须调用本工具获取专业依据；" +
-                        "常识性问题不需要调用。引用须标为本地知识库，不得将来源名称说成已经核验的官方原文或登记标签。",
+                "检索已登记来源的农技资料（含原文链接、机构、发布日期与适用地区/作物/生育期）。" +
+                        "涉及病害/虫害识别与防治、施肥浇水、农时操作时必须调用本工具获取依据；" +
+                        "常识性问题不需要调用。返回的每条资料都带「来源ID」，回答与处方只能引用这些 ID；" +
+                        "没有命中就如实说明依据不足，不得凭记忆补充剂量或登记信息。",
                 Map.of("type", "object",
-                        "properties", Map.of("query", Map.of("type", "string", "description", "检索关键词，如：水稻稻瘟病、小麦赤霉病、玉米倒伏、连阴雨后高温")),
+                        "properties", Map.of("query", Map.of("type", "string", "description", "检索关键词，如：水稻稻瘟病、小麦赤霉病、高温热害、连阴雨")),
                         "required", List.of("query")),
                 (args, ctx) -> {
                     String query = args.get("query") instanceof String s ? s : "";
                     if (query.isBlank()) return "请提供检索关键词。";
-                    List<KnowledgeService.Hit> hits = knowledge.search(query, null, 3);
-                    if (hits.isEmpty()) return "知识库暂无高度相关的条目，请根据常识审慎回答，明确说明依据不足。";
-                    return "【本地知识库，来源待核验】以下为本地整理资料，来源名称未逐条核验原文，不能据此声称官方已确认、现行登记或最新测报；用药剂量需另外核对有效登记标签。\n"
-                            + knowledge.formatHits(hits);
+                    FieldProfile field = ctx.extra("field") instanceof FieldProfile f ? f : null;
+                    String fieldCrop = field == null || field.crop() == null || field.crop().isBlank() ? null : field.crop().trim();
+                    // 用户在田块（例如水稻）下问另一个作物（例如小麦）时，按问题里的作物检索，否则会被田块作物硬过滤挡掉。
+                    String askedCrop = knowledge.detectCrop(query);
+                    String cropFilter = askedCrop != null ? askedCrop : fieldCrop;
+                    boolean crossCrop = askedCrop != null && fieldCrop != null && !askedCrop.equals(fieldCrop);
+                    String region = KnowledgeLibrary.regionOf(locationLabel(ctx));
+                    List<KnowledgeLibrary.SourcedHit> hits = knowledge.search(query, cropFilter, region, 3);
+                    if (hits.isEmpty()) {
+                        return "没有检索到与本问题相关的已登记资料。请明确说明依据不足，给出下一步需要现场核实的信息，不要凭记忆补充药剂剂量或登记信息。";
+                    }
+                    Set<String> retrieved = ctx.extra(RETRIEVED_CHUNKS) instanceof Set<?> existing
+                            ? new LinkedHashSet<>((Set<String>) existing) : new LinkedHashSet<>();
+                    for (KnowledgeLibrary.SourcedHit hit : hits) retrieved.add(hit.chunk().id());
+                    ctx.put(RETRIEVED_CHUNKS, retrieved);
+                    String external = knowledge.formatForModel(hits);
+                    if (crossCrop) {
+                        external = "注意：本次按问题中提到的「" + askedCrop + "」检索，与当前田块作物（" + fieldCrop + "）不同。"
+                                + "这些资料只能用于回答用户关于" + askedCrop + "的问题，不得用于当前田块的处方；回答时先说明这一点。\n" + external;
+                    }
+                    // 田块档案参与检索：从本田块历史记录中筛出与本次问题相关的条目（本地档案，不计入外部来源）
+                    String archive = matchFieldRecords(field, query);
+                    return archive.isBlank() ? external : archive + "\n\n" + external;
                 }));
 
         // ---- 7 日天气 ----
@@ -129,18 +165,42 @@ public class AgriTools {
         // ---- 处方单（产出型）----
         registry.register(ToolDefinition.of("submit_farm_plan",
                 "提交一份结构化农事处方单（方案）。当用户要求「方案/计划/处方/怎么办/安排」" +
-                        "且你已掌握足够信息（作物、生育期、天气、知识库依据）时，必须调用本工具提交最终方案。" +
-                        "每个动作需给出时间（具体日期）、用量（无则写明条件）、方法、风险与复查点，" +
-                        "并在 evidence 中引用知识库条目 id（如 rice-blast）。生成前先调用 get_field_context、" +
-                        "get_weather_forecast、search_agri_knowledge 获取依据。",
+                        "且你已掌握足够信息（作物、生育期、天气、资料依据）时，必须调用本工具提交最终方案。" +
+                        "每个动作需给出日期、时间窗口（window）、适用条件、所需物料（materials）、方法、风险与复查点，" +
+                        "并在 evidence 中填写本次 search_agri_knowledge 返回的来源ID（如 chunk-pest-rice-blast）。" +
+                        "用户资料或来源里没有的信息（用量、物料、具体时刻）一律写「待确认」，不得补造。" +
+                        "生成前先调用 get_field_context、get_weather_forecast、search_agri_knowledge 获取依据；" +
+                        "没有检索到资料时不要编造依据，把该动作的用量写为「需按当地登记标签核实」。" +
+                        "若用户已提交执行/复查记录，方案要明确写出相较上次建议的变化点与原因。",
                 planSchema(),
                 (args, ctx) -> {
                     if (!(args.get("title") instanceof String title) || title.isBlank()
                             || !(args.get("items") instanceof List<?> items) || items.isEmpty()) {
                         throw new IllegalArgumentException("处方单需要标题和农事动作");
                     }
-                    int count = items.size();
-                    return "已登记处方单「" + title + "」：共 " + count + " 项动作。请用自然语言向用户简短说明方案要点，并提醒以当地登记标签为准。";
+                    // 依据只能来自本次检索命中的来源：伪造、非列表、嵌套的 evidence 一律清空，不写进用户可见的处方。
+                    Set<String> allowed = ctx.extra(RETRIEVED_CHUNKS) instanceof Set<?> set
+                            ? (Set<String>) set : Set.of();
+                    int[] removed = {0};
+                    List<Object> sanitized = new ArrayList<>();
+                    int index = 0;
+                    for (Object item : items) {
+                        Object cleaned = sanitizeEvidenceContainers(item, allowed, removed);
+                        if (cleaned instanceof Map<?, ?> map) {
+                            // 方案项稳定 ID：用户点「加入任务」时用它做幂等键（同一方案项只登记一次）
+                            Map<String, Object> copy = new LinkedHashMap<>();
+                            map.forEach((key, value) -> copy.put(String.valueOf(key), value));
+                            copy.put("itemId", "p" + (++index));
+                            cleaned = copy;
+                        }
+                        sanitized.add(cleaned);
+                    }
+                    args.put("items", sanitized);
+                    String note = removed[0] > 0
+                            ? "其中 " + removed[0] + " 个依据不在本次检索结果中，已剔除，不要声称有资料支持。" : "";
+                    return "已登记处方单「" + title + "」：共 " + sanitized.size() + " 项动作。" + note
+                            + "请用自然语言向用户简短说明方案要点，并提醒以当地登记标签为准。"
+                            + "方案里的时间窗口、所需物料若用户资料里没有，保持「待确认」字样，不要在对话里补造。";
                 }));
 
         // ---- 待确认清单（产出型）----
@@ -168,10 +228,30 @@ public class AgriTools {
                         throw new IllegalArgumentException("确认清单需要引导语和 1 至 3 个相关问题");
                     }
                     int count = items.size();
-                    return "已登记确认清单（" + count + " 项）。请用 1-2 句话告知用户信息已记录，等用户点选后继续。";
+                    // 这个返回值决定模型下一轮的开场白：必须要求它先给实质内容，否则它只会写"确认卡已经发您了"。
+                    return "已登记确认清单（" + count + " 项）。现在请先用 1-2 句给出用户马上能用的结论或判断（引用了资料就带上来来源ID），"
+                            + "再说明确认卡已发出、点选后会据此细化。**这一轮不要提交处方单**：等信息问全了、用户答完卡之后再调用 submit_farm_plan，"
+                            + "一次只给一张方案卡。不要只写「确认卡已经发您了，点一下就行」这类没有实质内容的话。";
                 }));
 
         return registry;
+    }
+
+    /**
+     * 田块影像档案的近日记录：只报"什么时候拍过、备注写了什么"，让模型知道有影像可依据；
+     * 图片本身只有用户要求带图时才会一起发过来（省钱，也避免把旧照片当现状）。
+     */
+    private String photoContext(FieldProfile field) {
+        List<com.nongxin.service.UploadService.Stored> photos = uploads.latestForField(field.id(), 5);
+        if (photos.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("\n【田间照片档案】最近拍摄：");
+        sb.append(photos.stream()
+                .map(photo -> (photo.observedAt() == null || photo.observedAt().isBlank() ? "日期未知" : photo.observedAt())
+                        + (photo.note() == null || photo.note().isBlank() ? "" : "（" + photo.note() + "）"))
+                .collect(java.util.stream.Collectors.joining("、")));
+        sb.append("\n（这些是用户自己拍的照片；本轮有没有随附原图要看这次请求。");
+        sb.append("需要看图时提示用户点「让农心看这块地最近的状况」，不要假装看过没发来的照片）");
+        return sb.toString();
     }
 
     private String locationLabel(AgentContext ctx) {
@@ -182,21 +262,121 @@ public class AgriTools {
         return "未填";
     }
 
+    /**
+     * 田块的任务与用户记录：让对话知道"哪些安排真的做了、复查看到什么"。
+     * 这里输出的是用户提交的事实，模型不得把待执行的任务当成已经执行。
+     */
+    private String taskContext(FieldProfile field) {
+        List<FarmTask> fieldTasks = tasks.forField(field.id(), 8);
+        if (fieldTasks.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("\n农事任务与用户记录（用户提交的事实，不是模型推断）：\n");
+        for (FarmTask task : fieldTasks) {
+            sb.append("- [").append(task.statusLabel()).append("] ")
+                    .append(task.date() == null || task.date().isBlank() ? "日期待定" : task.date())
+                    .append(' ').append(task.title());
+            if (task.condition() != null && !task.condition().isBlank()) sb.append("（条件：").append(task.condition()).append("）");
+            sb.append('\n');
+            for (TaskRecord record : task.records()) {
+                sb.append("    · ").append(TaskRecord.kindLabel(record.kind())).append(' ').append(record.date())
+                        .append("：").append(record.note());
+                String outcome = TaskRecord.outcomeLabel(record.outcome());
+                if (!outcome.isBlank()) sb.append("（复查结论：").append(outcome).append("）");
+                sb.append('\n');
+            }
+        }
+        sb.append("（以上记录由用户提交：标「待确认/待执行」的任务还没做，不得说成已完成；");
+        sb.append("复查后调整建议时必须说明哪里变了、为什么变）");
+        return sb.toString();
+    }
+
+    /**
+     * 递归清洗任意层级里的 evidence 字段：非列表形态一律清空，列表里只保留本次检索命中的来源ID。
+     * 返回新的容器，不修改调用方传入的对象。
+     */
+    @SuppressWarnings("unchecked")
+    public static Object sanitizeEvidenceContainers(Object value, Set<String> allowed, int[] removed) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                copy.put(key, "evidence".equalsIgnoreCase(key)
+                        ? cleanEvidence(entry.getValue(), allowed, removed)
+                        : sanitizeEvidenceContainers(entry.getValue(), allowed, removed));
+            }
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            for (Object item : list) copy.add(sanitizeEvidenceContainers(item, allowed, removed));
+            return copy;
+        }
+        return value;
+    }
+
+    private static List<String> cleanEvidence(Object value, Set<String> allowed, int[] removed) {
+        List<String> out = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object id : list) {
+                if (id instanceof String sourceId && allowed.contains(sourceId.trim())) out.add(sourceId.trim());
+                else removed[0]++;
+            }
+        } else if (value != null) {
+            // 非列表形态（字符串、对象等）无法校验，一律清空。
+            removed[0]++;
+        }
+        return out;
+    }
+
+    /**
+     * 田块档案检索：把本田块历史记录中与当前问题相关的条目挑出来（本地档案，非外部资料）。
+     * 说明：记录是运行时数据、随时新增，故采用查询期匹配而非预先向量化；
+     * 无明确匹配时回退最近 3 条，保证"田块连续档案"始终参与上下文。
+     */
+    private String matchFieldRecords(FieldProfile field, String query) {
+        if (field == null || field.records() == null || field.records().isEmpty()) return "";
+        List<com.nongxin.model.FieldRecord> records = field.records();
+        Set<String> queryGrams = new LinkedHashSet<>();
+        String cleaned = query.replaceAll("[\\s，。？！、；：\"'“”（）【】\\-—…·%]", "");
+        for (int i = 0; i < cleaned.length(); i++) {
+            queryGrams.add(String.valueOf(cleaned.charAt(i)));
+            if (i + 1 < cleaned.length()) queryGrams.add(cleaned.substring(i, i + 2));
+        }
+        List<com.nongxin.model.FieldRecord> matched = new ArrayList<>();
+        for (com.nongxin.model.FieldRecord record : records) {
+            String note = record.note() == null ? "" : record.note();
+            for (String gram : queryGrams) {
+                if (gram.length() >= 2 && note.contains(gram)) { matched.add(record); break; }
+            }
+        }
+        List<com.nongxin.model.FieldRecord> use = matched.isEmpty()
+                ? records.subList(Math.max(0, records.size() - 3), records.size())
+                : matched.subList(Math.max(0, matched.size() - 5), matched.size());
+        StringBuilder sb = new StringBuilder("【本田块档案】").append(field.name());
+        if (!matched.isEmpty()) sb.append("（含与本次问题相关的历史记录）");
+        sb.append('\n');
+        for (com.nongxin.model.FieldRecord record : use) {
+            sb.append("- ").append(record.date()).append(' ').append(record.note()).append('\n');
+        }
+        sb.append("（以上为田块本地记录，可作为判断背景，但不得当作外部资料引用）");
+        return sb.toString();
+    }
     private Map<String, Object> planSchema() {
         Map<String, Object> itemProps = new LinkedHashMap<>();
         itemProps.put("date", Map.of("type", "string", "description", "执行日期 YYYY-MM-DD；若天气相关，注明条件（如：雨前）"));
+        itemProps.put("window", Map.of("type", "string", "description", "建议时间窗口/物候窗口，如：破口前 3—5 天、齐穗期；资料或用户信息里没有就写「待确认」"));
         itemProps.put("task", Map.of("type", "string", "description", "动作名称，如：晒田、喷施防治药"));
         itemProps.put("dosage", Map.of("type", "string", "description", "用量/配比（参考区间，注明以登记标签为准）"));
+        itemProps.put("materials", Map.of("type", "string", "description", "完成该动作需要的物料/器械；不清楚就写「待确认」，不要编造品牌或规格"));
         itemProps.put("method", Map.of("type", "string", "description", "操作方法"));
         itemProps.put("condition", Map.of("type", "string", "description", "执行条件（天气/生育期/观察前提）"));
         itemProps.put("warning", Map.of("type", "string", "description", "风险提示与避开事项"));
-        itemProps.put("review", Map.of("type", "string", "description", "复查动作与时间"));
-        itemProps.put("evidence", Map.of("type", "array", "items", Map.of("type", "string"), "description", "依据的知识库条目 id 列表，如 [\"rice-blast\"]"));
+        itemProps.put("review", Map.of("type", "string", "description", "复查动作与时间（或触发条件）"));
+        itemProps.put("evidence", Map.of("type", "array", "items", Map.of("type", "string"), "description", "依据来源ID列表，必须取自本次 search_agri_knowledge 返回的来源ID，如 [\"chunk-pest-rice-blast\"]"));
 
         Map<String, Object> itemSchema = Map.of(
                 "type", "object",
                 "properties", itemProps,
-                "required", List.of("date", "task", "condition", "review", "evidence"));
+                "required", List.of("date", "window", "task", "condition", "materials", "review", "evidence"));
 
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("title", Map.of("type", "string", "description", "方案标题，如：水稻分蘖期一周农事方案"));

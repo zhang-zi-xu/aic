@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Check, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { NxSelect } from '@/components/ui/nx-select';
 import { api, errorText, PROVIDERS, type AiSettings } from '@/lib/api';
 
 export function SettingsDialog({ open, onOpenChange, settings, onSave }: {
@@ -33,13 +34,19 @@ function SettingsForm({ settings, onSave }: { settings: AiSettings; onSave: (set
     } catch (e) { setError(errorText(e)); } finally { setTesting(false); }
   }
   return <form className="nx-form" onSubmit={e => { e.preventDefault(); try { onSave(valid()); } catch (err) { setError(errorText(err)); } }}>
-    <label className="nx-form-field">供应商<select value={draft.provider} disabled={testing} onChange={e => {
-      const p = PROVIDERS.find(p => p.id === e.target.value)!;
+    <label className="nx-form-field">供应商<NxSelect ariaLabel="供应商" value={draft.provider} disabled={testing} options={PROVIDERS.map(p => ({ value: p.id, label: p.label }))} onValueChange={id => {
+      const p = PROVIDERS.find(p => p.id === id)!;
       setDraft({ provider: p.id, baseUrl: p.baseUrl, model: p.model, apiKey: '' }); setSuccess(false); setError('');
-    }}>{PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
+    }} /></label>
     <label className="nx-form-field">API 地址<input type="url" autoComplete="off" value={draft.baseUrl} disabled={draft.provider !== 'custom' || testing} placeholder="https://你的服务商/v1" onChange={e => { setDraft({ ...draft, baseUrl: e.target.value }); setSuccess(false); }} /></label>
     <label className="nx-form-field">模型名称<input autoComplete="off" disabled={testing} value={draft.model} placeholder="填写供应商支持的完整模型 ID" maxLength={200} onChange={e => { setDraft({ ...draft, model: e.target.value }); setSuccess(false); }} /></label>
     <label className="nx-form-field">API Key<div className="nx-secret-input"><input autoComplete="off" spellCheck={false} disabled={testing} type={showKey ? 'text' : 'password'} value={draft.apiKey} placeholder="粘贴你的 API Key" onChange={e => { setDraft({ ...draft, apiKey: e.target.value }); setSuccess(false); }} /><button type="button" className="nx-icon-button" aria-label={showKey ? '隐藏密钥' : '显示密钥'} onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
+    <label className="nx-form-field">图片输入<NxSelect ariaLabel="图片输入" value={draft.vision ?? 'auto'} disabled={testing} options={[
+      { value: 'auto', label: '自动判断（推荐）', hint: '按模型名单' },
+      { value: 'on', label: '支持看图', hint: '我的模型支持' },
+      { value: 'off', label: '不支持', hint: '纯文本模型' },
+    ]} onValueChange={value => { setDraft({ ...draft, vision: value as 'auto' | 'on' | 'off' }); setSuccess(false); }} /></label>
+    <div className="nx-security-note"><ShieldCheck size={18} /><p>图片输入按模型名单自动判断；名单里没有的模型会被明确拒绝，不会把照片发给不看图的模型。照片在浏览器里压缩并去除 GPS 等 EXIF 信息，服务端会再清理一次。</p></div>
     <div className="nx-security-note"><ShieldCheck size={18} /><p>密钥仅在当前浏览器会话中保存。请求经 Java 后端转发到所选供应商，不写入数据库。切换供应商会清空密钥。</p></div>
     {error && <p role="alert" className="nx-error">{error}</p>}{success && <p role="status" className="nx-success"><Check size={15} />已收到模型回答，连接可用。</p>}
     <div className="nx-dialog-actions"><button className="nx-button" type="button" disabled={testing} onClick={() => void test()}>{testing ? '正在测试…' : '测试连接'}</button><button className="nx-button is-primary" disabled={testing} type="submit">保存设置</button></div>

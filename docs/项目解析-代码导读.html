@@ -1,0 +1,1208 @@
+<title>农心 Agent 代码全解</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;700;900&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+/* ── 配色：取自 PROJECT_BRIEF.md 的项目既有视觉方向（深墨绿 / 米纸白 / 朱砂橙） ── */
+:root{
+  --paper:#F7F5EF; --surface:#FFFFFF; --surface-2:#F1F0E7;
+  --ink:#14261F; --ink-soft:#3B4A42; --muted:#65746C;
+  --line:#E1E2D7; --line-strong:#CFD2C2;
+  --brand:#1B3A31; --brand-soft:#2C5849;
+  --cinnabar:#C2532B; --cinnabar-soft:#F3E4DC;
+  --jade:#3F6E58; --jade-soft:#E2EDE5;
+  --amber:#8A6A1F; --amber-soft:#F5EED9;
+  --code-bg:#14261F; --code-ink:#E6EDE7;
+  --shadow:0 1px 2px rgba(20,38,31,.06),0 8px 24px -12px rgba(20,38,31,.18);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1916; --surface:#16241F; --surface-2:#1B2C26;
+    --ink:#E7E9E0; --ink-soft:#C4CCC4; --muted:#98A89E;
+    --line:#26362F; --line-strong:#33473E;
+    --brand:#7FB39C; --brand-soft:#3F6E58;
+    --cinnabar:#E08454; --cinnabar-soft:#3A2418;
+    --jade:#7FB39C; --jade-soft:#1D2F27;
+    --amber:#D6B25E; --amber-soft:#2E2716;
+    --code-bg:#0B1210; --code-ink:#DCE6DE;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1916; --surface:#16241F; --surface-2:#1B2C26;
+  --ink:#E7E9E0; --ink-soft:#C4CCC4; --muted:#98A89E;
+  --line:#26362F; --line-strong:#33473E;
+  --brand:#7FB39C; --brand-soft:#3F6E58;
+  --cinnabar:#E08454; --cinnabar-soft:#3A2418;
+  --jade:#7FB39C; --jade-soft:#1D2F27;
+  --amber:#D6B25E; --amber-soft:#2E2716;
+  --code-bg:#0B1210; --code-ink:#DCE6DE;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:16px; line-height:1.75; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1400px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:250px minmax(0,1fr);gap:56px;align-items:start}
+@media (max-width:1080px){.wrap{grid-template-columns:minmax(0,1fr);gap:0}nav.toc{position:static !important;max-height:none !important;border-left:0 !important;padding-left:0 !important;margin-bottom:40px}}
+main{min-width:0;padding-bottom:120px;max-width:74ch}
+@media (max-width:1080px){main{max-width:none}}
+
+/* ── 顶部 ── */
+header.masthead{background:var(--brand);color:#F2F6F2;margin:0 0 56px;padding:64px 0 56px;position:relative;overflow:hidden}
+:root[data-theme="dark"] header.masthead{background:#122A23}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) header.masthead{background:#122A23}}
+header.masthead::after{content:"";position:absolute;inset:auto -10% -60% 40%;height:340px;
+  background:radial-gradient(closest-side,rgba(194,83,43,.22),transparent 72%);pointer-events:none}
+header.masthead .inner{max-width:1400px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+.eyebrow{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;opacity:.72;margin:0 0 20px}
+header.masthead h1{font-family:"Noto Serif SC",serif;font-weight:900;font-size:clamp(32px,4.6vw,52px);line-height:1.18;margin:0 0 18px;letter-spacing:-.01em;text-wrap:balance;max-width:22ch}
+header.masthead p.lede{margin:0;max-width:62ch;font-size:16.5px;line-height:1.8;color:rgba(242,246,242,.86)}
+.masthead-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.masthead-meta span{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;border:1px solid rgba(242,246,242,.28);border-radius:2px;padding:4px 10px;letter-spacing:.04em}
+
+/* ── 目录 ── */
+nav.toc{position:sticky;top:32px;max-height:calc(100vh - 64px);overflow-y:auto;border-left:2px solid var(--line-strong);padding:4px 0 4px 20px;margin-top:8px}
+nav.toc p{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:0 0 14px}
+nav.toc a{display:block;font-size:13.5px;color:var(--ink-soft);text-decoration:none;padding:3.5px 0;line-height:1.5;border-left:2px solid transparent;margin-left:-22px;padding-left:20px}
+nav.toc a:hover{color:var(--cinnabar)}
+nav.toc a.sub{padding-left:34px;font-size:12.5px;color:var(--muted)}
+
+/* ── 章节 ── */
+section{scroll-margin-top:28px;margin:0 0 84px}
+h2{font-family:"Noto Serif SC",serif;font-weight:700;font-size:clamp(23px,2.6vw,30px);line-height:1.3;margin:0 0 8px;letter-spacing:-.005em;text-wrap:balance;display:flex;gap:14px;align-items:baseline}
+h2 .num{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--cinnabar);letter-spacing:.06em;flex:none;padding-top:.35em}
+h3{font-family:"Noto Serif SC",serif;font-weight:700;font-size:19.5px;margin:44px 0 12px;line-height:1.4;text-wrap:balance}
+h4{font-size:15.5px;font-weight:700;margin:28px 0 8px;color:var(--ink)}
+h2+.subtitle{color:var(--muted);margin:0 0 28px;font-size:15.5px;max-width:66ch}
+p{margin:0 0 16px}
+a{color:var(--cinnabar);text-underline-offset:3px}
+strong{font-weight:700}
+em{font-style:normal;background:var(--amber-soft);padding:1px 5px;border-radius:2px;font-weight:500}
+hr{border:0;border-top:1px solid var(--line);margin:48px 0}
+ul,ol{margin:0 0 16px;padding-left:22px}
+li{margin:0 0 7px}
+li>ul,li>ol{margin-top:7px;margin-bottom:0}
+
+/* ── 行内代码 / 文件引用 ── */
+code{font-family:"JetBrains Mono","Noto Sans SC",ui-monospace,monospace;font-size:.855em;background:var(--surface-2);border:1px solid var(--line);border-radius:3px;padding:1.5px 5px;white-space:nowrap}
+.file{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.86em;color:var(--brand);font-weight:600;white-space:nowrap}
+:root[data-theme="dark"] .file{color:var(--brand)}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:5px;padding:18px 20px;overflow-x:auto;margin:0 0 20px;font-size:13px;line-height:1.72;box-shadow:var(--shadow)}
+pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit;white-space:pre}
+.codewrap{margin:0 0 22px}
+.codewrap pre{border-radius:0 0 5px 5px;margin:0;box-shadow:var(--shadow)}
+.codewrap .cap{background:var(--brand);color:#DDE7E0;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;padding:7px 16px;border-radius:5px 5px 0 0;letter-spacing:.03em;display:flex;justify-content:space-between;gap:12px}
+.codewrap .cap b{font-weight:600;color:#fff}
+:root[data-theme="dark"] .codewrap .cap{background:#0B1210;color:#9FB3A8}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .codewrap .cap{background:#0B1210;color:#9FB3A8}}
+.cm{color:#7E9587}
+.ck{color:#E5A87C}
+.cs{color:#A8CFB4}
+
+/* ── 表格 ── */
+.tablewrap{overflow-x:auto;margin:0 0 24px;border:1px solid var(--line);border-radius:5px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+th{text-align:left;font-weight:700;background:var(--surface-2);padding:10px 14px;border-bottom:1px solid var(--line-strong);white-space:nowrap;font-size:12.5px;letter-spacing:.02em}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.65}
+tr:last-child td{border-bottom:0}
+td code{font-size:12.3px}
+
+/* ── 提示块 ── */
+.note{border-left:3px solid var(--line-strong);background:var(--surface);padding:14px 18px;border-radius:0 5px 5px 0;margin:0 0 22px;font-size:14.5px;color:var(--ink-soft)}
+.note p:last-child{margin-bottom:0}
+.note .tag{display:block;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:6px;color:var(--muted);font-weight:600}
+.note.rule{border-left-color:var(--cinnabar);background:var(--cinnabar-soft)}
+.note.rule .tag{color:var(--cinnabar)}
+.note.ok{border-left-color:var(--jade);background:var(--jade-soft)}
+.note.ok .tag{color:var(--jade)}
+.note.warn{border-left-color:var(--amber);background:var(--amber-soft)}
+.note.warn .tag{color:var(--amber)}
+
+/* ── 速览卡 ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:0 0 32px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:16px 18px}
+.card b{display:block;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:22px;font-weight:600;color:var(--brand);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card span{display:block;font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.55}
+.card i{display:block;font-style:normal;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+
+/* ── 流程条 ── */
+.flow{display:flex;flex-wrap:wrap;gap:0;margin:0 0 28px;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--surface)}
+.flow div{flex:1 1 130px;padding:13px 14px;border-right:1px solid var(--line);font-size:13px;line-height:1.5}
+.flow div:last-child{border-right:0}
+.flow div b{display:block;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.12em;color:var(--cinnabar);margin-bottom:4px}
+
+/* ── 分层列表 ── */
+.layers{margin:0 0 26px}
+.layer{display:grid;grid-template-columns:112px minmax(0,1fr);gap:18px;padding:14px 0;border-bottom:1px solid var(--line)}
+.layer:first-child{border-top:1px solid var(--line)}
+.layer dt{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;color:var(--cinnabar);font-weight:600}
+.layer dd{margin:0;font-size:14.5px;line-height:1.7}
+@media (max-width:640px){.layer{grid-template-columns:minmax(0,1fr);gap:4px}}
+
+.pill{display:inline-block;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.06em;padding:2px 8px;border-radius:20px;border:1px solid var(--line-strong);color:var(--muted);white-space:nowrap}
+.pill.ok{border-color:var(--jade);color:var(--jade);background:var(--jade-soft)}
+.pill.no{border-color:var(--cinnabar);color:var(--cinnabar);background:var(--cinnabar-soft)}
+.pill.wait{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
+.pill.done{border-color:var(--jade);color:var(--jade);background:var(--jade-soft)}
+
+.muted{color:var(--muted)}
+.small{font-size:13.5px}
+footer{border-top:1px solid var(--line);margin-top:24px;padding:28px 0 0;font-size:13px;color:var(--muted)}
+body{overflow-x:hidden}
+</style>
+
+<header class="masthead">
+  <div class="inner">
+    <p class="eyebrow">D:\aic · 代码导读 · 全量通读</p>
+    <h1>农心 Agent 代码全解</h1>
+    <p class="lede">把 <code style="background:rgba(255,255,255,.12);border-color:transparent;color:#fff">D:\aic</code> 里约一万行 Java 与 TypeScript 从头到尾读一遍之后，写下的这份地图：它长什么样、一次提问如何流过它、每一层为什么这么写、以及哪些地方写错了。</p>
+    <div class="masthead-meta">
+      <span>后端 7,835 行 Java</span>
+      <span>前端 2,335 行 TS/TSX</span>
+      <span>后端 110 测试</span>
+      <span>前端 35 测试</span>
+      <span>6 张表</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <p>目录</p>
+  <a href="#s0">0 · 三十秒速览</a>
+  <a href="#s1">1 · 它是什么，为谁而建</a>
+  <a href="#s2">2 · 一次提问的完整旅程</a>
+  <a href="#s3">3 · 数据与持久化</a>
+  <a class="sub" href="#s3-1">表结构</a>
+  <a class="sub" href="#s3-2">版本化迁移</a>
+  <a href="#s4">4 · 后端逐层精读</a>
+  <a class="sub" href="#s4-1">4.1 启动与装配</a>
+  <a class="sub" href="#s4-2">4.2 model 层</a>
+  <a class="sub" href="#s4-3">4.3 controller 层</a>
+  <a class="sub" href="#s4-4">4.4 agent 层</a>
+  <a class="sub" href="#s4-5">4.5 service 层</a>
+  <a href="#s5">5 · 知识库与三路检索</a>
+  <a href="#s6">6 · 前端逐层精读</a>
+  <a href="#s7">7 · 红线与不变量</a>
+  <a href="#s8">8 · 测试体系</a>
+  <a href="#s9">9 · 我实测发现的出入</a>
+  <a href="#s10">10 · 上手清单</a>
+</nav>
+
+<main>
+
+<!-- ═══════════════════════ 0 ═══════════════════════ -->
+<section id="s0">
+  <h2><span class="num">00</span>三十秒速览</h2>
+  <p class="subtitle">如果你只记五件事。</p>
+
+  <div class="cards">
+    <div class="card"><i>形态</i><b>前后端分离</b><span>React 19 + Vite（3000）／ Java 21 + Spring Boot（8080），各自构建、各自运行</span></div>
+    <div class="card"><i>核心</i><b>Agent 工具循环</b><span>最多 5 轮，模型自己决定调哪个工具，产出结构化卡片</span></div>
+    <div class="card"><i>检索</i><b>三路 RRF</b><span>关键词 + 向量 + 知识图谱，缺一路自动降级</span></div>
+    <div class="card"><i>闭环</i><b>五态状态机</b><span>建议 → 确认 → 执行 → 复查，AI 不能宣告完成</span></div>
+  </div>
+
+  <div class="note rule"><span class="tag">贯穿全项目的那一条纪律</span>
+  <p><strong>没有录入的，就不能假装存在。</strong>没有田块就不编田块；没有检索命中就不给剂量；没有用户提交的记录，任务就不能算完成。这不是一句产品口号——它被写进了提示词、工具返回值、数据库约束和 110 条测试里。读这份代码时，几乎每一处"看起来绕"的设计，追溯回去都是为这一条服务。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 1 ═══════════════════════ -->
+<section id="s1">
+  <h2><span class="num">01</span>它是什么，为谁而建</h2>
+  <p class="subtitle">读懂产品定位，才能理解后面那些"过度设计"的判断。</p>
+
+  <p>参赛作品。第八届全球校园人工智能算法精英大赛「AI+农业」赛题五——<strong>农业智能体与大模型决策服务赛</strong>。要接收自然语言或上传的农情数据，生成个性化农事管理方案、病虫害防治建议、水肥调控处方或生产规划报告。评审看四件事：专业性、可操作性、交互自然流畅度、知识检索准确性。</p>
+
+  <p>所以产品主线被压成一句可执行的话，写在 <span class="file">PROJECT_BRIEF.md:11</span>：</p>
+
+  <div class="flow">
+    <div><b>01</b>说清农情</div>
+    <div><b>02</b>补充必要信息</div>
+    <div><b>03</b>查到可核验依据</div>
+    <div><b>04</b>给出有条件的建议</div>
+    <div><b>05</b>用户确认加入任务</div>
+    <div><b>06</b>记录执行与复查</div>
+  </div>
+
+  <p>这条链上的每一步在代码里都有对应的落点，这是全项目最该记住的一张对照表：</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>链路环节</th><th>代码落点</th><th>它守的是什么</th></tr></thead>
+    <tbody>
+      <tr><td>说清农情</td><td><span class="file">ChatController.buildSystemPrompt()</span></td><td>回答必须分「你提供的事实／资料支持的判断／仍需核实的信息」三块</td></tr>
+      <tr><td>补充必要信息</td><td><code>submit_clarify</code> + <span class="file">ClarifyCard</span></td><td>追问的唯一通道是工具调用，不能只在正文里"请确认"</td></tr>
+      <tr><td>查到可核验依据</td><td><span class="file">KnowledgeLibraryImpl.search()</span></td><td>必须有标题/关键词级命中，仅正文偶然命中不算依据</td></tr>
+      <tr><td>给出有条件的建议</td><td><code>submit_farm_plan</code> + 依据白名单清洗</td><td>依据只能引用本次召回集合，伪 ID 一律剔除</td></tr>
+      <tr><td>用户确认加入任务</td><td><code>TaskService.create</code> 幂等登记</td><td>方案是草稿，确认才成任务；同项重复点只登记一条</td></tr>
+      <tr><td>记录执行与复查</td><td><code>TaskService.addRecord</code></td><td>状态推进必须由用户提交的事实驱动</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>设计约束（用户定的，不能违背）</h3>
+  <p>这些写在 <span class="file">PROJECT_BRIEF.md</span> 与 <span class="file">docs/开发交接与后续实施清单.md</span> 里，是硬约束而非建议——改代码时踩到它们，改动大概率会被推翻：</p>
+  <ul>
+    <li><strong>视觉</strong>：县域农技服务站 × 田间记录本。深墨绿、米纸白、朱砂橙。<em>克制、可信、能落地</em>。明令禁止荧光渐变、悬浮玻璃卡片、机器人头像、AI 星光。</li>
+    <li><strong>技术栈</strong>：必须保持 Java + Spring Boot 后端，不要为了托管平台兼容性换回全栈 JS。</li>
+    <li><strong>密钥</strong>：不能进源码、Git、数据库、日志、导出文件或截图。只能待在浏览器 sessionStorage。</li>
+    <li><strong>确认卡</strong>：必须逐题保留答案，通过"提交并继续"整理成一条完整用户消息，<em>不能退化成单击选项直接覆盖聊天框</em>。</li>
+    <li><strong>事实纪律</strong>：建议不是事实，加入任务不代表已执行，没有原文核验不能宣称官方依据。</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════ 2 ═══════════════════════ -->
+<section id="s2">
+  <h2><span class="num">02</span>一次提问的完整旅程</h2>
+  <p class="subtitle">这是全项目的主干。看懂这一节，剩下的都是细节。</p>
+
+  <p>用户在输入框敲「我这水稻刚破口，稻瘟病怎么防？」，勾选了天气，点发送。接下来发生的事情，按时间顺序：</p>
+
+  <div class="codewrap">
+    <div class="cap"><b>浏览器 → Java → 模型 → Java → 浏览器</b><span>全程约 5–30 秒</span></div>
+<pre><code><span class="cm">① 前端 App.tsx:send()</span>
+   先落一条"未完成"占位消息并 PUT /api/conversations 持久化
+   ↓ 保存失败则不调用模型（App.tsx:220）
+
+<span class="cm">② POST /api/chat/stream  (SSE)</span>
+   ChatController.stream() → ChatStreams.open()   <span class="cm">// 交线程池，立即返回 SseEmitter</span>
+   ChatStreams 先发一个 status:"请求已接收…"，再挂 10 秒心跳 ping
+
+<span class="cm">③ 密钥与限额  ApiKeyServiceImpl.resolve()</span>
+   用户自带 Key → 直接用；没有则服务端演示 Key 兜底 + 按日计数
+
+<span class="cm">④ 组装上下文  ChatController.chat()</span>
+   field 快照 / location / weather.dailyText → AgentContext
+   buildSystemPrompt() 拼出约 3000 字的系统提示词
+   sanitizeMessages() 只保留最近 20 条 user/assistant 消息
+
+<span class="cm">⑤ Agent 循环  AgentRunner.run()  最多 5 轮</span>
+   ┌─ 发 status:"正在连接模型…"，清空前端暂存（reset 事件）
+   │  模型返回 tool_calls: search_agri_knowledge("水稻稻瘟病")
+   │  → KnowledgeLibraryImpl.search() 三路召回 + RRF，产出 chunk-pest-rice-blast
+   │  → 工具结果回填为 role:tool 消息，并把命中的 chunkId 写进 ctx.retrievedChunks
+   ├─ 第 2 轮：模型调 get_field_context / submit_farm_plan
+   │  → AgriTools 递归清洗 evidence，只留白名单内的来源 ID
+   └─ 第 3 轮：模型不再调工具，返回正文 → AgentResult(reply, submissions)
+
+<span class="cm">⑥ 出参清洗  ChatController.chat()</span>
+   sanitizePlanEvidence()  ← 纵深防御，再过滤一次处方依据
+   sanitizeCitations()     ← 正文里的伪 chunk-xxx 替换为明确提示
+   library.cards(ctx.retrievedChunks)  ← 来源卡由后端从资料库生成
+
+<span class="cm">⑦ SSE done 事件 → 前端</span>
+   前端组装 assistant 消息（reply + plan + risk + clarify + sources + degraded）
+   PUT /api/conversations 保存完整对话
+
+<span class="cm">⑧ 用户点方案卡「加入任务」</span>
+   POST /api/tasks  →  201 新建 / 200 复用同一条（幂等）</code></pre>
+  </div>
+
+  <div class="note"><span class="tag">为什么先保存再问模型</span>
+  <p><span class="file">App.tsx:220</span> 先 <code>persist(pending)</code> 落库，成功才发请求。这是为了保证"屏幕上出现过的用户消息，数据库里一定有"——如果保存失败，用户会看到「回答尚未保存到数据库，请勿刷新页面」和一个独立的「重试保存」按钮，模型根本不会被调用。反过来，如果回答失败但保存成功，屏幕上保留的是一条标着 <code>status:'interrupted'</code> 的消息，它会永久留在历史里但<strong>不会进入后续对话上下文</strong>（<span class="file">lib/chat.ts:24</span>）。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 3 ═══════════════════════ -->
+<section id="s3">
+  <h2><span class="num">03</span>数据与持久化</h2>
+  <p class="subtitle">SQLite，六张业务表 + 一张版本表。整个系统没有 ORM，全是 JdbcTemplate 手写 SQL。</p>
+
+  <h3 id="s3-1">表结构</h3>
+  <p><span class="file">server/src/main/resources/schema.sql</span> 负责"新库直接建到基线"，<span class="file">SchemaMigrationService</span> 负责"老库逐步升级"。两条路径都要求幂等。</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>表</th><th>作用</th><th>关键列</th></tr></thead>
+    <tbody>
+      <tr><td><code>fields</code></td><td>田块档案</td><td>name / crop / variety / sow_date / area_mu</td></tr>
+      <tr><td><code>field_records</code></td><td>田块日常观察记录</td><td>field_id / record_date / note</td></tr>
+      <tr><td><code>farm_tasks</code></td><td>农事任务（P2 起带状态机）</td><td><strong>status</strong> / plan_item_id / source_message_id / evidence(JSON)</td></tr>
+      <tr><td><code>task_records</code></td><td>执行与复查记录</td><td>task_id / kind(execution|review) / outcome / field_id</td></tr>
+      <tr><td><code>conversations</code></td><td>会话</td><td>messages_json（整段 JSON，非拆行存储）</td></tr>
+      <tr><td><code>kb_vectors</code></td><td>RAG 向量索引</td><td>chunk_id / model / dim / vector(JSON)</td></tr>
+      <tr><td><code>api_usage</code></td><td>演示 Key 成本护栏</td><td>(day, scope, scope_key) 联合主键</td></tr>
+      <tr><td><code>answer_cache</code></td><td>答案缓存</td><td>cache_key = SHA-256 指纹前 32 位</td></tr>
+      <tr><td><code>schema_version</code></td><td>结构版本</td><td>version(PK) / applied_at / note</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>三个值得注意的设计</h4>
+  <ul>
+    <li><strong>会话消息整段存 JSON</strong>（<code>conversations.messages_json</code>）。不是拆成消息行。代价是不能按消息查询，收益是读写一次成型、天然保序。单会话上限 2MB（<span class="file">ConversationService.java:41</span>）。</li>
+    <li><strong>答案缓存的键不含问题原文</strong>。原文会被哈希成 SHA-256 前 32 位十六进制（<span class="file">AnswerCacheServiceImpl.java:110</span>），避免把用户问题直接当主键落库。而且<em>含天气快照的请求根本不缓存</em>——天气随时效变化，缓存会让过期的施药窗口被当成新答案。</li>
+    <li><strong>唯一索引带 WHERE 条件</strong>：<code>idx_tasks_plan_item(source_message_id, plan_item_id) WHERE 两者均非空</code>。SQLite 视 NULL 为互不相同，所以迁移来的历史任务（这两个字段为空）不会互相冲突。</li>
+  </ul>
+
+  <h3 id="s3-2">版本化迁移</h3>
+  <p><span class="file">service/SchemaMigrationService.java</span>，201 行，是 P2 阶段最重要的基础设施之一。它的契约很明确：</p>
+
+  <ol>
+    <li>启动时读 <code>schema_version</code> 表的最大 version；表不存在则用"有没有 farm_tasks 表"判断是全新库（0）还是基线库（1）。</li>
+    <li>版本已达标 → 直接返回，<strong>不产生备份</strong>（避免每次启动都堆积文件）。</li>
+    <li>需要升级且是老库 → 先备份。备份用 <code>VACUUM INTO</code> 做一致性快照，失败才退回文件复制（<span class="file">:104</span>）。</li>
+    <li>执行迁移步骤，<em>每一步都可重复执行</em>：<code>addColumn()</code> 先查 <code>pragma_table_info</code>，列存在就跳过。所以中断后重启不会卡住也不会重复加列。</li>
+    <li>记录新版本号。</li>
+  </ol>
+
+  <div class="codewrap">
+    <div class="cap"><b>SchemaMigrationService.java</b><span>v1 → v2 的核心动作</span></div>
+<pre><code><span class="cm">// 旧的 done 布尔量并入状态机，然后删掉这一列——避免两个字段各说各话</span>
+if (columnExists("farm_tasks", "done")) {
+    jdbc.update("UPDATE farm_tasks SET status = CASE WHEN done = 1 THEN 'completed' ELSE 'pending' END");
+    jdbc.execute("ALTER TABLE farm_tasks DROP COLUMN done");
+}
+
+<span class="cm">// 迁移来的历史任务不猜完成时间：completed_at 保持为空</span>
+<span class="cm">// 注释原文：「完成时间不猜测，迁移来的历史任务 completed_at 保持为空」</span></code></pre>
+  </div>
+
+  <p>真实数据库里跑过一次：<code>server/data/backup/nongxin-v1-20260911-075905.db</code> 是迁移前自动备份（7 条任务、2 个田块、6 段对话齐全），迁移后用户数据一条没少。现在库里 7 条任务的状态是迁移按 <code>done=1 → completed</code> 转过来的。</p>
+</section>
+
+<!-- ═══════════════════════ 4 ═══════════════════════ -->
+<section id="s4">
+  <h2><span class="num">04</span>后端逐层精读</h2>
+  <p class="subtitle">包结构非常规整：controller → service → persistence / agent。没有循环依赖，没有注解魔法。</p>
+
+  <dl class="layers">
+    <div class="layer"><dt>com.nongxin</dt><dd><span class="file">NongxinApplication.java</span> — 启动入口，24 行</dd></div>
+    <div class="layer"><dt>model/</dt><dd>22 个 <code>record</code>。全是不可变数据载体，几乎没有逻辑——例外见 <code>FarmTask</code> 与 <code>TaskStatus</code></dd></div>
+    <div class="layer"><dt>controller/</dt><dd>10 个 REST 入口。参数校验、出参清洗、异常映射都在这一层</dd></div>
+    <div class="layer"><dt>agent/</dt><dd>8 个类。工具循环、SSE 流解析、工具注册表、农业工具集</dd></div>
+    <div class="layer"><dt>service/</dt><dd>14 个接口 + <code>impl/</code> 下 12 个实现。业务逻辑主场</dd></div>
+  </dl>
+
+  <h3 id="s4-1">4.1 启动与装配</h3>
+  <p><span class="file">NongxinApplication.java</span> 只有一件事值得说：它在 <code>SpringApplication.run()</code> 之前先 <code>Files.createDirectories(Path.of("data"))</code>。因为 SQLite 用的是相对路径 <code>./data/nongxin.db</code>，<strong>数据库路径相对于启动目录</strong>——这解释了 README 里为什么反复强调"固定从 <code>server</code> 目录启动"。</p>
+
+  <p>真正复杂的装配发生在三个 <code>ApplicationReadyEvent</code> 监听器里，它们在应用启动完成后按序触发：</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>监听器</th><th>做什么</th><th>失败会怎样</th></tr></thead>
+    <tbody>
+      <tr><td><span class="file">KnowledgeGraphServiceImpl.build()</span></td><td>从全部 44 个片段构图：212 个实体节点、356 条归属边</td><td>图谱路跳过，检索退回关键词 + 向量</td></tr>
+      <tr><td><span class="file">VectorIndexBootstrap.indexOnStartup()</span></td><td>后台守护线程给片段向量化，写 <code>kb_vectors</code></td><td>只打警告，<strong>不影响关键词检索</strong></td></tr>
+      <tr><td><span class="file">SchemaMigrationService.afterPropertiesSet()</span></td><td>结构迁移（它实现的是 <code>InitializingBean</code>，时机更早）</td><td>迁移失败会中断启动——这是对的，结构不对不该继续跑</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note ok"><span class="tag">降级是默认姿势</span>
+  <p>注意向量索引启动的写法（<span class="file">VectorIndexBootstrap.java:41</span>）：开一个 <code>setDaemon(true)</code> 的线程去索引，异常只 <code>log.warn</code>。整个 RAG 链路上，向量、图谱、天气、地理编码、答案缓存、用量计数——<strong>任何一个外部依赖挂掉都不阻断主流程</strong>。这是刻意的：农技问答的可用性不应取决于某个第三方服务。</p>
+  </div>
+
+  <h3 id="s4-2">4.2 model 层：22 个数据载体</h3>
+  <p>绝大多数是纯 <code>record</code>，一行到十几行。但有三个例外，它们承载了业务规则。</p>
+
+  <h4>TaskStatus — 五态状态机</h4>
+  <p><span class="file">model/TaskStatus.java</span>，枚举，71 行。这是 P2 的设计核心：</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>状态</th><th>code</th><th>怎么进入</th><th>能直接切到</th></tr></thead>
+    <tbody>
+      <tr><td>待确认</td><td><code>pending_confirmation</code></td><td>AI 方案项登记</td><td>待执行 / 取消</td></tr>
+      <tr><td>待执行</td><td><code>pending</code></td><td>用户点「确认安排」</td><td>取消</td></tr>
+      <tr><td>已执行待复查</td><td><code>awaiting_review</code></td><td><strong>只能</strong>由提交执行记录进入</td><td>待执行（退回）/ 取消</td></tr>
+      <tr><td>已完成</td><td><code>completed</code></td><td><strong>只能</strong>由提交复查记录进入</td><td>待执行（重开）</td></tr>
+      <tr><td>取消</td><td><code>cancelled</code></td><td>用户取消</td><td>待执行（重开）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>两个静态方法定义了铁律：</p>
+  <div class="codewrap">
+    <div class="cap"><b>TaskStatus.java:52–65</b><span>状态机的全部规则</span></div>
+<pre><code><span class="cm">/** 不依赖记录即可直接切换到的目标状态。 */</span>
+public boolean allows(TaskStatus target) {
+    if (target == this) return true;
+    return switch (this) {
+        case PENDING_CONFIRMATION -&gt; target == PENDING || target == CANCELLED;
+        case PENDING              -&gt; target == CANCELLED;
+        case AWAITING_REVIEW      -&gt; target == PENDING || target == CANCELLED;
+        case COMPLETED, CANCELLED -&gt; target == PENDING;
+    };
+}
+
+<span class="cm">/** 目标状态是否必须提交执行/复查记录才能进入。 */</span>
+public static boolean requiresRecord(TaskStatus target) {
+    return target == AWAITING_REVIEW || target == COMPLETED;
+}</code></pre>
+  </div>
+  <p><code>allows()</code> 里<strong>根本没有</strong> <code>AWAITING_REVIEW</code> 和 <code>COMPLETED</code> 这两个目标状态——所以任何"直接改状态到已完成"的请求都会在 <code>allows()</code> 之前被 <code>requiresRecord()</code> 拦下并抛 <code>IllegalStateException</code> → HTTP 409。这就是 P2 报告里第 3 步验到的「无执行记录直接标已执行待复查 → 409」。</p>
+
+  <h4>FarmTask — 紧凑构造器里的规范化</h4>
+  <p><span class="file">model/FarmTask.java:38</span> 有个容易忽略但很重要的紧凑构造器：</p>
+  <div class="codewrap">
+    <div class="cap"><b>FarmTask.java</b><span>唯一一处会改写入参的地方</span></div>
+<pre><code>public FarmTask {
+    statusLabel = TaskStatus.of(status).label();   <span class="cm">// 文案由 status 推导，忽略调用方传入的值</span>
+    status      = TaskStatus.of(status).code();    <span class="cm">// 同时把 "PENDING" / "pending" 统一成 "pending"</span>
+    evidence      = evidence == null ? List.of() : List.copyOf(evidence);
+    evidenceCards = evidenceCards == null ? List.of() : List.copyOf(evidenceCards);
+    records       = records == null ? List.of() : List.copyOf(records);
+}</code></pre>
+  </div>
+  <p>注释写得很直白：<em>「避免前后端两套文案」</em>。前端拿到的 <code>statusLabel</code> 永远是后端算的，前端只负责给不同状态配颜色（<span class="file">workspace-views.tsx:49</span> 的 <code>TASK_STATUS_TONE</code>）。<code>TaskStatus.of()</code> 还顺手接受枚举名（<code>"PENDING"</code>）和 code（<code>"pending"</code>）两种写法，大小写不敏感。</p>
+
+  <h4>TaskRecord — 结论枚举</h4>
+  <p>复查结论限定为五个值：<code>resolved</code> 问题已解决 / <code>improved</code> 明显好转 / <code>unchanged</code> 没有变化 / <code>worse</code> 反而变差 / <code>other</code> 其他情况。<code>outcomeLabel()</code> 对未知值返回空串——<span class="file">TaskController.java:139</span> 用它做校验：<em>非空但 label 为空 = 非法取值</em>。</p>
+
+  <h3 id="s4-3">4.3 controller 层：10 个入口</h3>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Controller</th><th>路由</th><th>行数</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td><span class="file">CatalogController</span></td><td><code>/api/health</code> <code>/api/knowledge</code></td><td>68</td><td>来源登记清单，含全部片段正文</td></tr>
+      <tr><td><span class="file">ChatController</span></td><td><code>/api/chat</code> <code>/api/chat/stream</code></td><td>385</td><td>全项目最重的一个，见下</td></tr>
+      <tr><td><span class="file">ChatStreams</span></td><td>—（组件）</td><td>67</td><td>SSE 线程池 + 心跳 + 断连检测</td></tr>
+      <tr><td><span class="file">ContextController</span></td><td><code>/api/context</code></td><td>112</td><td>定位/城市 → 位置 + 天气 + 7 日预报</td></tr>
+      <tr><td><span class="file">ConversationController</span></td><td><code>/api/conversations</code></td><td>100</td><td>保存前做敏感字段扫描</td></tr>
+      <tr><td><span class="file">FieldController</span></td><td><code>/api/fields</code></td><td>95</td><td>田块 CRUD + 观察记录</td></tr>
+      <tr><td><span class="file">TaskController</span></td><td><code>/api/tasks</code></td><td>167</td><td>状态流转、记录提交、依据白名单</td></tr>
+      <tr><td><span class="file">KbIndexController</span></td><td><code>/api/kb/status</code> <code>/api/kb/reindex</code></td><td>84</td><td>向量索引管理</td></tr>
+      <tr><td><span class="file">RetrievalEvalController</span></td><td><code>/api/kb/eval</code></td><td>185</td><td>检索效果评估，口径最讲究的一段代码</td></tr>
+      <tr><td><span class="file">ApiExceptionHandler</span></td><td>—</td><td>53</td><td>异常 → HTTP 状态码的统一映射</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>ChatController — 三个必须看懂的地方</h4>
+
+  <p><strong>① 系统提示词就在 Java 里。</strong><span class="file">ChatController.java:320–378</span> 的 <code>buildSystemPrompt()</code> 是一个约 3000 字的中文长字符串。整个产品的"人格与纪律"都在这段文字里：语气、回答结构、说话方式、事实纪律、工具使用规则、专业红线。它不是一个配置文件——改提示词就是改 Java 源码再重新打包。这是当前架构最粗糙、也最需要小心的地方之一。</p>
+
+  <p>提示词里有几条是<em>真机联调踩坑后补上的</em>，值得单独拎出来看：</p>
+  <div class="codewrap">
+    <div class="cap"><b>ChatController.java:345–346</b><span>两处来自真实缺陷的补丁</span></div>
+<pre><code><span class="cm">// ① 时间自洽：结论说"尽快"，时间表就不能排到三天后</span>
+"- 时间安排必须与自己的结论一致：结论是「尽快施药/立刻压住」时，时间表就不能排到几天之后；
+   若因天气等原因必须推迟，要明确说明这是权衡（例如「叶瘟宜早打，但 9/11—9/12 有雨，权衡后落在 9/13」）…"
+
+<span class="cm">// ② 数值不许跨作物套用</span>
+"- 具体数值（时限、间隔、次数、剂量）必须与引用来源一致；来源没写的不要自拟。
+   例如「施药后 N 小时遇雨补喷」只能照引来源写过的时长，
+   不得把别的作物的规则套过来（小麦赤霉病的「施药后 4 小时遇雨补治」不适用于水稻稻瘟病）"</code></pre>
+  </div>
+
+  <p><strong>② 口头追问的机制兜底。</strong><span class="file">ChatController.java:127–151</span>。模型有时会在正文里写"请确认 XX"却不调用 <code>submit_clarify</code>——那样用户界面根本不会出现确认卡，等于没完成回答。代码用正则 <code>ORAL_CLARIFY_RE</code> 检测这种倾向，命中就<strong>再发一次强制工具轮</strong>：只暴露 <code>submit_clarify</code> 一个工具 + <code>tool_choice: "required"</code>，逼模型补一张卡。这一轮还特别处理了"补卡轮轮次用尽"的误伤：</p>
+  <div class="codewrap">
+    <div class="cap"><b>ChatController.java:140–145</b><span>为什么不能因为补卡轮失败就把完整回答标成"部分完成"</span></div>
+<pre><code><span class="cm">// 这一轮的用途只是补一张确认卡：拿到卡就用原回复，
+// 不因为"补卡轮轮次用尽"把完整回答标成部分完成。</span>
+boolean cardProduced = retry.submissions().stream().anyMatch(s -&gt; "submit_clarify".equals(s.name()));
+List&lt;ToolSubmission&gt; merged = new ArrayList&lt;&gt;(retry.submissions());
+merged.addAll(result.submissions());
+String reply = (retry.degraded() || cardProduced) ? result.reply() : retry.reply();
+boolean degraded = cardProduced ? result.degraded() : (retry.degraded() || result.degraded());</code></pre>
+  </div>
+
+  <p><strong>③ 两道依据清洗。</strong>模型可能引用不存在的来源 ID。防线有两层：</p>
+  <ul>
+    <li><code>sanitizePlanEvidence()</code>（<span class="file">:208</span>）调 <code>AgriTools.sanitizeEvidenceContainers()</code> 递归清洗处方结构里所有叫 <code>evidence</code> 的字段；</li>
+    <li><code>sanitizeCitations()</code>（<span class="file">:220</span>）用正则扫正文里的 <code>chunk-[A-Za-z0-9-]{1,80}</code>，不在白名单内的替换成「（来源ID未在本次检索结果中）」。</li>
+  </ul>
+  <p>白名单的构造在 <code>allowedSources()</code>（<span class="file">:195</span>），它有个容易漏掉的细节：<strong>白名单 = 本轮命中 ∪ 历史各轮命中</strong>。历史部分来自客户端回传的 <code>priorSources</code>，但服务端会先 <code>library.resolve()</code> 验证这些 ID 真的存在于资料库——客户端没法凭空造一个合法 ID。</p>
+
+  <h4>ChatStreams — 67 行的并发控制</h4>
+  <p>这个类是 SSE 可靠性的全部。四个设计动作：</p>
+  <div class="codewrap">
+    <div class="cap"><b>ChatStreams.java</b><span>线程池 + 心跳 + 取消</span></div>
+<pre><code><span class="cm">// 有界线程池：核心 2、最大 8、队列 8。满了抛 Overloaded → HTTP 429</span>
+private final ExecutorService workers = new ThreadPoolExecutor(2, 8, 30, TimeUnit.SECONDS,
+        new ArrayBlockingQueue&lt;&gt;(8), Thread.ofPlatform().daemon().name("chat-stream-", 0).factory());
+
+<span class="cm">// 每 10 秒 ping 一次：不是为了保活，是为了发现"客户端已经走了"</span>
+ScheduledFuture&lt;?&gt; heartbeat = clock.scheduleAtFixedRate(() -&gt; {
+    if (closed.get()) return;
+    try { observer.event("ping", Map.of()); }
+    catch (CancellationException e) { task.cancel(true); emitter.complete(); }   <span class="cm">// 写不出去 = 断连</span>
+}, 10, 10, TimeUnit.SECONDS);
+
+<span class="cm">// 三种终止路径统一走同一个 cancel</span>
+emitter.onCompletion(cancel); emitter.onTimeout(cancel); emitter.onError(error -&gt; cancel.run());</code></pre>
+  </div>
+  <p><code>closed</code> 是个 <code>AtomicBoolean</code>，业务代码通过 <code>observer.check()</code> 在循环里轮询它——一旦用户点"停止回答"或断开连接，正在跑的 Agent 循环会在下一个检查点抛 <code>CancellationException</code> 退出。<strong>注意这不等于供应商停止计费</strong>，README 里专门写明了。</p>
+
+  <div class="note warn"><span class="tag">一个真实的坑，已修</span>
+  <p>P0 报告记录：<code>stream()</code> 早期返回 <code>ResponseEntity&lt;SseEmitter&gt;</code>，会被 Spring 路由到消息转换器并抛 <code>No converter for SseEmitter</code>——生产同样 500。现在改成直接返回 <code>SseEmitter</code>，响应头用 <code>HttpServletResponse</code> 注入。<span class="file">ChatController.java:74</span> 上留了注释解释原因。</p>
+  </div>
+
+  <h4>ConversationController — 保存时的敏感字段扫描</h4>
+  <p><span class="file">ConversationController.java:19</span> 定义了一个黑名单：<code>apikey / authorization / settings / password / secret / accesstoken</code>。<code>rejectPrivateKeys()</code> 递归遍历消息里所有嵌套结构（plan、risk、clarify、evidence、requestContext），把 key 里的 <code>_</code> 和 <code>-</code> 去掉再小写后比对——所以 <code>api_key</code>、<code>apiKey</code>、<code>API-KEY</code> 都会被拦下。命中就抛异常，整个保存失败。</p>
+  <p>另一个动作在 <code>rebuildSources()</code>（<span class="file">:66</span>）：客户端传来的来源卡<strong>只取 ID</strong>，内容由 <code>library.cards(ids)</code> 从资料库重新生成。这样客户端无法伪造一个"已核验原文"的绿色徽章或一条假外链。</p>
+
+  <h4>TaskController — 依据白名单与创建语义</h4>
+  <p><code>knownEvidence()</code>（<span class="file">:156</span>）对前端传来的 <code>evidence</code> 数组做同样的清洗：只保留 <code>knowledge.resolve()</code> 能解析到的真实 chunkId。配合 SQLite 的唯一索引，<code>create()</code> 实现幂等：先 <code>findByPlanItem()</code>，命中返回已有任务 → HTTP 200；否则新建 → HTTP 201。前端据此区分"新增了几项"和"已经登记过几项"。</p>
+  <p><code>validate()</code>（<span class="file">:98</span>）还做了两件事：① 如果传了 <code>fieldId</code>，<strong>田块名称以服务端查出来的为准</strong>，不信客户端传的 <code>fieldName</code>；② 新建任务时状态只能是 <code>pending</code> 或 <code>pending_confirmation</code>，不能直接创建成已完成。</p>
+
+  <h4>RetrievalEvalController — 最讲究口径的一段代码</h4>
+  <p>这个类值得单独读，因为它记录了一次<em>自我纠错</em>。类注释（<span class="file">:18–26</span>）写了三条诚实原则，其中第一条承认了上一版评估的偏差：</p>
+  <div class="note"><span class="tag">原文引用</span>
+  <p>「初版评估让关键词路受「标题/关键词级命中」约束、混合路有三条通道投票，实际是「让基线被卡死、再看混合路胜出」——这种比较没有意义。」</p>
+  </div>
+  <p>修正后做了三件事：<strong>同深度对照</strong>（两条路径都用同一个 topK）、<strong>用例分型</strong>（12 条用例标注为 8 条 <code>LITERAL</code> 与 4 条 <code>SEMANTIC</code>）、<strong>本地哈希向量在 semantic 类上的命中不计入成绩</strong>（<span class="file">:95</span>）：</p>
+  <div class="codewrap">
+    <div class="cap"><b>RetrievalEvalController.java:94–96</b><span>这一行是整份代码里最诚实的一行</span></div>
+<pre><code><span class="cm">// 本地哈希向量在 semantic 类上的命中不计入有效成绩（它不是语义能力）</span>
+boolean hCounted = hHit &amp;&amp; !(evalCase.kind() == Kind.SEMANTIC &amp;&amp; "local-hash".equals(vectorKind));
+if (hCounted) hybridHit[idx]++;</code></pre>
+  </div>
+
+  <h4>ApiExceptionHandler — 异常到状态码</h4>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>异常</th><th>HTTP</th><th>场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>IllegalArgumentException</code></td><td>400</td><td>参数校验失败</td></tr>
+      <tr><td><code>IllegalStateException</code></td><td>409</td><td>状态冲突，例如没提交记录就想标已完成</td></tr>
+      <tr><td><code>ChatStreams.Overloaded</code></td><td>429</td><td>对话线程池满</td></tr>
+      <tr><td><code>HttpMessageNotReadableException</code></td><td>400</td><td>请求体 JSON 格式错</td></tr>
+      <tr><td><code>DataIntegrityViolationException</code></td><td>409</td><td>唯一约束冲突</td></tr>
+      <tr><td><code>DataAccessException</code></td><td>409 / 500</td><td>SQLite 错误码 19 → 409，其余 → 500</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>RequestValidation — 共享校验工具</h4>
+  <p>54 行的静态工具类。有两个细节：<code>id()</code> 限制为 <code>[A-Za-z0-9_-]+</code>，天然挡掉路径穿越（<code>../</code>、<code>%2e%2e</code> 都进不来）；<code>date()</code> 先用正则卡格式再交给 <code>LocalDate.parse</code> 验证语义合法性，所以 <code>2026-02-30</code> 会被拒。它还配了专门的测试 <span class="file">server/src/test/.../DateValidationTest</span>（见第 8 节）。</p>
+
+  <h3 id="s4-4">4.4 agent 层：工具循环</h3>
+  <p>8 个类，是整个「AI 技术应用」得分点的落点。</p>
+
+  <h4>AgentRunner — 322 行的心脏</h4>
+  <p>移植自参考项目 yoked 的 <code>chatWithTools</code>。核心是一个循环：</p>
+  <div class="codewrap">
+    <div class="cap"><b>AgentRunner.java:98–188</b><span>循环骨架</span></div>
+<pre><code>while (rounds &lt; maxRounds) {                       <span class="cm">// 上限 5 轮，或 60 秒墙钟</span>
+    stream.check();                                 <span class="cm">// 每轮开始先检查用户是否已取消</span>
+    stream.event("reset", Map.of());                <span class="cm">// 清空前端"正在生成"的暂存文本</span>
+    stream.event("status", …"正在连接模型…" / "正在结合工具结果整理回答…");
+
+    body.put("messages", messages);                 <span class="cm">// system + history + 累积的 assistant/tool 轮</span>
+    if (forced) { 只暴露目标工具 + tool_choice:"required" }   <span class="cm">// 强制工具轮，用过一次就置 false</span>
+    else if (!toolDefs.isEmpty()) body.put("tools", toolDefs);
+
+    message = requestStream(...) 或 requestCompletion(...);
+    toolCalls = normalizeToolCalls(message.get("tool_calls"));
+
+    if (toolCalls.isEmpty()) {
+        if (content.isBlank()) throw new ProviderException("供应商没有返回可用的回答…");
+        return new AgentResult(content.trim(), submissions, rounds + 1, false);   <span class="cm">// 正常结束</span>
+    }
+    <span class="cm">// 否则：把 assistant 消息（含 tool_calls）压进 messages，逐个执行工具，</span>
+    <span class="cm">// 每个工具结果作为 role:"tool" 消息回填，进入下一轮</span>
+}</code></pre>
+  </div>
+
+  <p>三个关键机制：</p>
+
+  <p><strong>① 工具结果的采集是"结果优先"的。</strong><span class="file">:171–180</span>。对 <code>submit_*</code> 类工具，它收集的不是模型的入参，而是工具执行时写进上下文里的<em>计算结果</em>：</p>
+  <div class="codewrap">
+    <div class="cap"><b>AgentRunner.java:171–179</b><span>风险卡绝不能用模型输入文本</span></div>
+<pre><code>} else if (SUBMISSION_TOOLS.contains(name)) {
+    Object computedResult = config.ctx().extra(SUBMISSION_RESULT_KEY);
+    <span class="cm">// Risk cards must contain the rule engine result, never the model's input text.</span>
+    if (computedResult != null) {
+        Map&lt;String, Object&gt; output = objectMapper.convertValue(computedResult, new TypeReference&lt;&gt;() {});
+        submissions.add(new ToolSubmission(name, output, resultText));
+    } else if (!"submit_risk_report".equals(name)) {
+        submissions.add(new ToolSubmission(name, args, resultText));   <span class="cm">// 其余工具用入参</span>
+    }
+}</code></pre>
+  </div>
+  <p>为什么重要：<code>submit_risk_report</code> 的入参是模型写的原始农情数据，而卡片上要展示的必须是 <code>RiskServiceImpl</code> 规则引擎算出来的分级结果。如果收集入参，模型就能"自己说自己低风险"。注释写明了这一点。</p>
+
+  <p><strong>② degraded（部分完成）语义。</strong>工具有产出之后供应商才失败或超时，不能把失败伪装成正常完成，但也不该丢掉已经生成的卡片。三条路径都会返回 <code>degraded=true</code>：时间耗尽（<span class="file">:104</span>）、供应商异常（<span class="file">:135</span>）、轮次用尽（<span class="file">:190</span>）。</p>
+
+  <p><strong>③ 供应商错误的文案是白名单式的。</strong>每个 HTTP 状态码映射到一句写死的中文，<strong>绝不回显上游原始响应</strong>——既避免把网关的报错细节暴露给用户，也杜绝密钥意外出现在错误信息里。<code>log.warn("对话供应商返回 HTTP {}", status)</code> 也只记状态码。</p>
+
+  <h4>CompletionStream — SSE 分片解析</h4>
+  <p>95 行，逐行读 <code>data:</code> 行，处理三件容易出错的事：</p>
+  <ul>
+    <li><strong>工具调用是分片到达的</strong>。OpenAI 协议里 <code>tool_calls[].function.arguments</code> 会拆成多个 delta，需要按 <code>index</code> 累积。代码用 <code>TreeMap&lt;Integer, ToolParts&gt;</code> 按 index 归并（<span class="file">:21</span>），<code>ToolParts</code> 里有三个 <code>StringBuilder</code> 分别累积 id / name / args。</li>
+    <li><strong>EOF 不等于成功</strong>。<span class="file">:48</span>：流读完了但 <code>finish</code> 还是 null → 抛「回答连接中断，未收到完整结果，请重试」。<code>finish_reason</code> 不是 <code>stop</code> 或 <code>tool_calls</code> 也要抛，其中 <code>length</code> 单独给一句更具体的提示（输出达到长度限制）。</li>
+    <li><strong>多层体量上限</strong>：整行累计 2MB（<span class="file">:34</span>）、正文 20,000 字符（<span class="file">:72</span>）、单个工具参数 200KB（<span class="file">:85</span>）、工具调用 index 上限 63。</li>
+  </ul>
+  <div class="note"><span class="tag">刻意忽略的东西</span>
+  <p><span class="file">:75</span> 有一行注释：<code>// Deliberately ignore reasoning_content and other provider-private metadata.</code> 思维链内容永远不进入前端的流式文本。这是隐私与体验的双重考虑——用户不该看到模型的推理草稿。</p>
+  </div>
+
+  <h4>ToolRegistry / ToolDefinition</h4>
+  <p>极简的注册表。50 行 + 32 行。<code>ToolDefinition</code> 是个 record：名称、描述、JSON Schema 参数、执行器、可用条件谓词。执行器签名是 <code>BiFunction&lt;Map, AgentContext, String&gt;</code>，返回文本给模型看。<code>execute()</code> 捕获所有异常并转成 <code>"工具执行失败：…"</code> 字符串——工具炸了不应该让整个对话 500。</p>
+  <p><code>available</code> 谓词目前所有工具都是 <code>ctx -&gt; true</code>，但接口留着——将来做多用户或按田块裁剪工具集时用得上。</p>
+
+  <h4>AgriTools — 六个工具</h4>
+  <p>369 行，注册了六个工具。这是产品能力清单，逐一看：</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>工具</th><th>类型</th><th>作用</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td><code>get_field_context</code></td><td>查询</td><td>田块档案 + 生育期 + 最近 5 条记录 + <strong>任务与用户记录</strong></td><td>末尾声明"待确认/待执行的任务还没做，不得说成已完成"</td></tr>
+      <tr><td><code>search_agri_knowledge</code></td><td>查询</td><td>三路检索，返回带来源 ID 的资料</td><td>写回 <code>ctx.retrievedChunks</code>；跨作物时加警示前缀</td></tr>
+      <tr><td><code>get_weather_forecast</code></td><td>查询</td><td>返回请求携带的 7 日预报文本</td><td>没有就如实说没有</td></tr>
+      <tr><td><code>submit_risk_report</code></td><td><strong>产出</strong></td><td>规则引擎风险判定</td><td>算好的 <code>RiskReport</code> 另存 ctx，卡片用它而非入参</td></tr>
+      <tr><td><code>submit_farm_plan</code></td><td><strong>产出</strong></td><td>结构化处方单</td><td>递归清洗 evidence + 注入 <code>itemId</code>（p1、p2…）</td></tr>
+      <tr><td><code>submit_clarify</code></td><td><strong>产出</strong></td><td>确认卡（最多 3 题）</td><td>返回值里<em>明确要求模型先给实质内容</em></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>两个细节值得展开。</p>
+
+  <p><strong>跨作物检索的处理。</strong><span class="file">AgriTools.java:92–95</span>：用户在"甲田（水稻）"下问小麦问题，如果按田块作物硬过滤，小麦资料全被挡掉。所以先 <code>knowledge.detectCrop(query)</code> 从问题里识别作物，命中就用问题里的作物检索，并且给返回结果加一段前缀：</p>
+  <div class="codewrap">
+    <div class="cap"><b>AgriTools.java:106–109</b><span>跨作物时的自我声明</span></div>
+<pre><code>if (crossCrop) {
+    external = "注意：本次按问题中提到的「" + askedCrop + "」检索，与当前田块作物（" + fieldCrop + "）不同。"
+            + "这些资料只能用于回答用户关于" + askedCrop + "的问题，不得用于当前田块的处方；回答时先说明这一点。\n"
+            + external;
+}</code></pre>
+  </div>
+
+  <p><strong>submit_clarify 的返回值是一份"行为契约"。</strong>工具返回给模型的文本决定了模型下一轮会说什么。<span class="file">:228</span> 的返回值写得很长，就是为了防止模型只回一句"确认卡已经发您了，点一下就行"：</p>
+  <div class="codewrap">
+    <div class="cap"><b>AgriTools.java:228–230</b><span>用工具返回值约束模型行为</span></div>
+<pre><code>return "已登记确认清单（" + count + " 项）。现在请先用 1-2 句给出用户马上能用的结论、关键时间窗口或现场核查要点"
+     + "（引用了资料就带上来来源ID），再说明确认卡已发出、点选后会据此细化。"
+     + "用户答完卡后，如果信息已足够，请调用 submit_farm_plan 提交处方单（用户靠这张卡加入任务），"
+     + "不要再追问或只给一段文字。不要只写「确认卡已经发您了，点一下就行」这类没有实质内容的话。";</code></pre>
+  </div>
+
+  <p><strong>evidence 清洗是递归的。</strong><code>sanitizeEvidenceContainers()</code>（<span class="file">:276</span>）遍历任意层级的 Map/List，凡是 key 等于 <code>evidence</code>（大小写不敏感）就清洗；非列表形态一律清空并计数。返回新容器，不改调用方对象。这个方法被 <code>AgriTools</code> 和 <code>ChatController.sanitizePlanEvidence()</code> 共用，形成纵深防御。</p>
+
+  <p>还有一处容易被忽略的巧思：<code>matchFieldRecords()</code>（<span class="file">:314</span>）把本田块的历史记录也参与了检索。它用查询的 1-gram 和 2-gram 去匹配记录文本，命中就取最近 5 条，没命中就退回最近 3 条。注释解释了为什么不预先向量化：<em>「记录是运行时数据、随时新增，故采用查询期匹配」</em>。</p>
+
+  <h3 id="s4-5">4.5 service 层</h3>
+  <p>12 个实现，按重要性排：</p>
+
+  <h4>TaskService — 状态推进的唯一入口</h4>
+  <p><span class="file">service/TaskService.java</span>，225 行。<code>addRecord()</code>（<span class="file">:160</span>）是 P2 闭环的核心，它做的事比"插一行记录"多得多：</p>
+  <div class="codewrap">
+    <div class="cap"><b>TaskService.java:160–193</b><span>提交记录 → 推进状态</span></div>
+<pre><code>public FarmTask addRecord(String taskId, TaskRecord record) {
+    TaskStatus from = TaskStatus.of(task.status());
+    boolean execution = TaskRecord.KIND_EXECUTION.equals(record.kind());
+    TaskStatus target = execution ? TaskStatus.AWAITING_REVIEW : TaskStatus.COMPLETED;
+
+    if (from == CANCELLED)  throw new IllegalStateException("任务已取消，如需继续请先恢复为待执行");
+    if (!execution &amp;&amp; (from == PENDING_CONFIRMATION || from == PENDING))
+        throw new IllegalStateException("还没有执行记录：复查记录需要在执行之后再提交");
+    if (from == COMPLETED &amp;&amp; execution)
+        throw new IllegalStateException("任务已完成，如需再执行一次请先把状态改回待执行");
+
+    <span class="cm">// 记录先落库（永远保留），再推进状态</span>
+    jdbc.update("INSERT INTO task_records …");
+    <span class="cm">// 用 CASE WHEN 一次性写入状态与对应的时间戳，避免多次 UPDATE</span>
+    jdbc.update("UPDATE farm_tasks SET status=?, updated_at=?, confirmed_at=COALESCE(confirmed_at,?),"
+              + " executed_at=CASE WHEN ?='awaiting_review' THEN ? ELSE executed_at END,"
+              + " completed_at=CASE WHEN ?='completed'   THEN ? ELSE completed_at END WHERE id=?", …);
+}</code></pre>
+  </div>
+  <p>注意 <code>confirmed_at=COALESCE(confirmed_at, ?)</code>：确认时间只在第一次填。而 <code>executed_at</code> / <code>completed_at</code> 用 <code>CASE WHEN</code> 条件写——重复提交同类型记录时不会覆盖原时间。</p>
+  <p>还有一处排序细节：<code>forField()</code>（<span class="file">:74</span>）按 <code>task_date DESC</code> 取最近 8 条给对话上下文用，而 <code>list()</code> 是 <code>task_date ASC</code> 给任务页用。同一个表两个方向，各取所需。</p>
+
+  <h4>RiskServiceImpl — R0–R5 规则引擎</h4>
+  <p>206 行。这是「规则筛查」而非「模型判断」的体现，也是全项目在措辞上最谨慎的代码。六条规则：</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>规则</th><th>触发条件</th><th>等级</th><th>措辞里的保留</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td>空气湿度 ≥ 85%</td><td>中</td><td>"观测持续时间与叶面湿润情况尚未核实，不能据此确诊病害"</td></tr>
+      <tr><td>R2</td><td>降水量 ≥ 50mm</td><td>高</td><td>"统计时段尚未核实，不能直接作为 24 小时累计量或暴雨判定"</td></tr>
+      <tr><td>R3</td><td>风速 ≥ 50km/h</td><td>中</td><td>"需核实原始单位、平均风或阵风及作物实际状态"</td></tr>
+      <tr><td>R4</td><td>土壤湿度 &lt; 40%</td><td>中</td><td>"含水率定义、土壤类型和传感器标定尚未核实"</td></tr>
+      <tr><td>R5</td><td>气温 ≤ 0°C <em>且</em> 处于抽穗/扬花/花期/孕穗</td><td>高</td><td>"估算生育期需通过田间观察核实"</td></tr>
+      <tr><td>R0</td><td>一个有效指标都没识别到</td><td>未知</td><td>"这不代表低风险或没有风险"</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>两处实现细节很讲究。</p>
+  <p><strong>单位换算。</strong><span class="file">:45</span>：风速如果后面跟着 <code>m/s</code> 或 <code>米/秒</code>，乘 3.6 转成 km/h 再比阈值。</p>
+  <p><strong>指标串扰防护。</strong><span class="file">:40</span> 有一行很有意思的代码：</p>
+  <div class="codewrap">
+    <div class="cap"><b>RiskServiceImpl.java:39–40</b><span>防止"土壤湿度 35%"被当成"空气湿度 35%"</span></div>
+<pre><code><span class="cm">// Remove soil readings before matching generic 湿度, so the same reading is not air humidity.</span>
+String source = "湿度".equals(name)
+        ? METRIC_PATTERNS.get("土壤湿度").matcher(text).replaceAll("")
+        : text;</code></pre>
+  </div>
+  <p>匹配空气湿度前，先把文本里所有"土壤湿度 XX"整体删掉。否则「土壤湿度 35%」会被空气湿度的正则匹配到，得出"湿度 35%"——一个会直接翻转结论的错误。</p>
+
+  <h4>PhenologyServiceImpl — 简化的天数窗口模型</h4>
+  <p>62 行。三张表（水稻 / 小麦 / 玉米），每张是若干 <code>(名称, 起天, 止天, 说明)</code>。算法是：从播期到今天算天数，落在哪个窗口就是哪个生育期。超出最后一段会返回「播期已超 N 天，请确认实际生育期」。所有输出都带「（估）」字样。</p>
+  <div class="note"><span class="tag">注意这份实现有两处</span>
+  <p><span class="file">server/.../service/impl/PhenologyServiceImpl.java</span> 和 <span class="file">frontend/src/lib/phenology.ts</span> 是<strong>两份独立的实现</strong>，表内容几乎一样但不是同一份数据源。改生育期规则时两边都要改。另外前端那份多了一个"播期尚未到"的分支（<span class="file">phenology.ts:51</span>），后端没有。</p>
+  </div>
+
+  <h4>ApiKeyServiceImpl — 成本护栏</h4>
+  <p>156 行。三种情形：用户自带 Key（直接放行，不计数）、服务端演示 Key 兜底（按 IP + 全局双限额计数）、都没有（返回空 Key 让上层提示）。</p>
+  <p>计数用 SQLite 的原子 upsert：<code>INSERT … ON CONFLICT(day, scope, scope_key) DO UPDATE SET count = count + 1</code>。但真正的设计意图在两个 <code>catch</code> 里：</p>
+  <div class="codewrap">
+    <div class="cap"><b>ApiKeyServiceImpl.java:96–100</b><span>计数失败不阻断服务</span></div>
+<pre><code>} catch (Exception e) {
+    <span class="cm">// 计数失败不应阻断正常使用（宁可少赚不能误伤）</span>
+    log.warn("用量计数失败，放行本次请求：{}", e.getMessage());
+    return new Resolution(defaultApiKey, true, null, defaultProvider, defaultModel);
+}</code></pre>
+  </div>
+  <p>客户端 IP 的取法也考虑了反代：优先 <code>X-Forwarded-For</code> 首段，其次 <code>X-Real-IP</code>，最后 <code>getRemoteAddr()</code>，全失败返回 <code>"unknown"</code>。</p>
+
+  <h4>AnswerCacheServiceImpl — 缓存</h4>
+  <p>137 行。四个方法加一个 <code>buildKey()</code>。缓存的读写<strong>所有异常都吞掉</strong>（只 <code>log.warn</code>）——缓存是优化，不该成为故障点。过期判定在读取时做，顺带删除。</p>
+  <p><code>buildKey()</code> 里 <code>if (!enabled || weatherSensitive) return null;</code> 这一行是安全设计：返回 null 表示"不该缓存"，调用方看到 null 就跳过。</p>
+
+  <h4>FieldServiceImpl — 删除时的手工级联</h4>
+  <p><span class="file">:55</span> 的 <code>delete()</code> 有一行注释解释了为什么要手写：</p>
+  <div class="codewrap">
+    <div class="cap"><b>FieldServiceImpl.java:55–61</b><span>SQLite 外键默认不开</span></div>
+<pre><code><span class="cm">// SQLite connections may not enable foreign keys; keep dependent data consistent explicitly.</span>
+jdbc.update("DELETE FROM field_records WHERE field_id = ?", id);
+jdbc.update("UPDATE farm_tasks    SET field_id = NULL WHERE field_id = ?", id);   <span class="cm">// 任务保留，只断开关联</span>
+jdbc.update("UPDATE conversations SET field_id = NULL WHERE field_id = ?", id);
+return jdbc.update("DELETE FROM fields WHERE id = ?", id) &gt; 0;</code></pre>
+  </div>
+  <p>这就是 P2 报告里「删除田块后任务保留并显示"（原关联田块）"」的实现。注意 <code>schema.sql</code> 里写了 <code>FOREIGN KEY … ON DELETE SET NULL</code>，但那只是声明——SQLite 需要 <code>PRAGMA foreign_keys=ON</code> 才生效，而 <code>application.yml</code> 里没有配。所以级联实际靠这段手工代码。</p>
+
+  <h4>GeoServiceImpl / WeatherServiceImpl</h4>
+  <p>地理编码三级降级：内置城市表（358 行 CSV，精确匹配 → 前缀匹配 → 包含匹配 → 省份简称匹配）→ Photon 兜底 → 失败降级为坐标文本。天气用 Open-Meteo，WMO 天气代码映射到一个 <code>Map&lt;Integer,String&gt;</code>（<span class="file">WeatherServiceImpl.java:24</span>），未知代码显示成"代码 N"而不是猜一个。</p>
+
+  <h4>向量与图谱</h4>
+  <p>见下一节。</p>
+</section>
+
+<!-- ═══════════════════════ 5 ═══════════════════════ -->
+<section id="s5">
+  <h2><span class="num">05</span>知识库与三路检索</h2>
+  <p class="subtitle">这是「知识检索准确性」这个评分项的落点，也是全项目技术含量最集中的地方。</p>
+
+  <h3>语料构成</h3>
+  <div class="cards">
+    <div class="card"><i>已核验原文</i><b>5 篇</b><span>农业农村部 / 全国农技推广中心 / 河南 / 浙江，全部带 URL 与发布日期</span></div>
+    <div class="card"><i>本地草稿</i><b>17 条</b><span>统一标记 unverified，无 URL、无原文定位，只能当线索</span></div>
+    <div class="card"><i>片段总数</i><b>44</b><span>5 篇原文切出 27 条 + 17 条草稿各 1 条</span></div>
+    <div class="card"><i>图谱规模</i><b>212 节点</b><span>356 条归属边，44 个片段节点</span></div>
+  </div>
+
+  <p>5 篇已核验原文是：水稻"一喷多促"技术意见（2025）、水稻应对高温热害技术意见（2026）、粮食作物重大病虫害防控技术方案（2025）、河南小麦后期管理指导意见（2022）、浙江梅涝灾后恢复生产技术指导意见（2024）。覆盖<strong>水稻（长江中下游/浙江）与小麦（黄淮/河南）</strong>两类作物两个地区——出了这个范围，系统应当明确回答"没有查到可引用的依据"。</p>
+
+  <div class="note rule"><span class="tag">核验状态不可混用</span>
+  <p>草稿的 <code>reviewStatus</code> 永远是 <code>unverified</code>，且 <code>KnowledgeDocument.verified()</code> 只在等于 <code>"verified"</code> 时返回 true。想要把一条草稿改成已核验，<strong>必须逐条对照原文</strong>——代码里没有任何"批量升级"的口子。</p>
+  </div>
+
+  <h3>路 A：关键词稀疏检索</h3>
+  <p><span class="file">KnowledgeLibraryImpl.java:274</span> <code>rankByKeyword()</code>。流程是：</p>
+
+  <ol>
+    <li><strong>分词</strong>（<code>ngrams()</code>，<span class="file">:432</span>）：先剥掉全部标点和数字字母，然后生成 1-gram 和 2-gram。<strong>先剔除停用词</strong>——<code>STOP_TERMS</code> 有 28 个泛化词（防治、防控、管理、技术、措施、方法…）。注释解释了原因：<em>「泛化 2-gram 会造成"柑橘黄龙病防治"命中一切含"防治"的片段」</em>。</li>
+    <li><strong>同义词扩展</strong>（<code>expandTerms()</code>，<span class="file">:443</span>）：18 组同义词表，命中任意一个就整组加入。"稻瘟病"会扩展出"稻瘟 / 叶瘟 / 穗颈瘟"。</li>
+    <li><strong>作物硬过滤</strong>（<span class="file">:196</span>）：水稻问题<em>绝不</em>能拿小麦资料当依据。作物为空或"通用"的片段始终放行。</li>
+    <li><strong>标题级命中门槛</strong>（<code>headlineHit()</code>，<span class="file">:323</span>）：必须至少有一个词命中<strong>标题或关键词</strong>。仅正文偶然命中不算依据。这条约束是刻意的保守。</li>
+    <li><strong>加权打分</strong>（<code>score()</code>，<span class="file">:416</span>）：标题 +10 &gt; 关键词 +8 &gt; 作物 +5 &gt; 正文 +3。然后 <code>weightedScore()</code> 再加两项：已核验原文 <strong>+4</strong>、与请求地区同区 <strong>+4</strong>。</li>
+  </ol>
+
+  <div class="note"><span class="tag">地区为什么不硬过滤</span>
+  <p><span class="file">:298</span> 的注释：「同一条资料常跨省适用，硬过滤会让结果随"是否勾选天气"而变化」。所以地区改成加权排序 + 来源卡展示适用地区。<code>regionAffinity()</code> 里有个精妙的地图 <code>REGION_ALIASES</code>：浙江属于长江中下游稻区、河南属于黄淮麦区——没有这层映射，本地资料会被自己的过滤规则挡掉。</p>
+  </div>
+
+  <h3>路 B：向量语义检索</h3>
+  <p><span class="file">SqliteVectorIndexServiceImpl.java</span>（190 行）+ <span class="file">SiliconFlowEmbeddingServiceImpl.java</span>（132 行）。</p>
+
+  <p>索引持久化在 <code>kb_vectors</code> 表，内存里保留一份 <code>Map&lt;String, float[]&gt;</code> 缓存。检索时在缓存上做余弦相似度——因为片段只有 44 条，暴力扫完全够用，不需要向量数据库。</p>
+
+  <p>有几个细节：<strong>向量化的文本是拼接的</strong>（<span class="file">:154</span>）：标题 → 作物 → 主题 → 生育期 → 关键词 → 正文，标题信息前置，与关键词检索的字段权重思路一致。<strong>混模型数据会被跳过</strong>（<span class="file">:51</span>）：载入缓存时如果发现某行的 model 与第一条不同，直接 <code>continue</code>——不同模型的向量不可比。<code>ready()</code> 要求三件事同时成立：embedding 可用、缓存非空、<em>当前模型名与索引模型名一致</em>。</p>
+
+  <p>还有一个离线兜底实现 <span class="file">LocalHashEmbeddingServiceImpl.java</span>：中文按字符 n-gram 哈希到 256 维（带符号累加 + L2 归一化），不调用任何外部服务。它的类注释把自己的能力边界写得很清楚：</p>
+  <div class="note warn"><span class="tag">这段注释值得原样引用</span>
+  <p>「它能捕捉"字面部分重合"（叶瘟/白穗 ↔ 叶片发白），比纯关键词宽松；但<strong>不具备真实语义模型的跨词泛化能力</strong>（"像开水烫过" → 稻瘟病 这类需要 bge-m3 等模型）。因此正式演示与评估使用 remote 模式，本实现仅作离线降级与链路自检。」</p>
+  </div>
+
+  <h3>路 C：知识图谱</h3>
+  <p><span class="file">KnowledgeGraphServiceImpl.java</span>，162 行，纯内存邻接表，没有图数据库。</p>
+
+  <p>构图在启动时一次完成。节点有两类：<strong>实体节点</strong>（作物 / 主题 / 生育期 / 关键词，共 212 个）和<strong>片段节点</strong>（44 个）。边有两种：归属边（实体 → 片段，356 条）与共现边（同一文档内的片段互为邻居）。</p>
+
+  <p><code>expand()</code>（<span class="file">:108</span>）做三件事并累加打分：① 查询里字面命中的实体节点，取其邻居片段；② 已命中片段的同文档共现邻居；③ 作物聚焦——把 <code>作物:X</code> 节点下的片段也加进来。最后按分数排序取前 N。</p>
+
+  <div class="note ok"><span class="tag">图谱不产生新事实</span>
+  <p>类注释：「节点集合完全由已核验/草稿片段推导，因此不会出现"图谱里有、资料库里没有"的凭空事实。」这一点很关键——它让图谱只承担<em>索引结构</em>的角色，不成为第二个事实源。</p>
+  </div>
+
+  <h3>RRF 融合</h3>
+  <p><span class="file">KnowledgeLibraryImpl.java:235–270</span>。三路结果用 Reciprocal Rank Fusion 合并：<code>score = Σ 1/(k + rank)</code>，<code>k=60</code>。好处是不需要给三路调权重——只用排名，不用分数，而三路的分数本来也不可比。</p>
+  <p>代码里有三处小注释值得注意：纯向量命中的 <code>SourcedHit</code> 分数记为 1，"表示有依据但非字面命中，排序由融合分决定"；三个 <code>poolById</code> / <code>chunkById</code> / <code>graphChunkIndex</code> 的重复构造是为了让每条路都能按作物过滤后的候选池来查——三路共用同一个 <code>pool</code>，保证作物硬过滤对三路都生效。</p>
+
+  <h3>降级路径</h3>
+  <div class="codewrap">
+    <div class="cap"><b>KnowledgeLibraryImpl.java:204–209</b><span>向量不可用时行为完全不变</span></div>
+<pre><code><span class="cm">// ---- 降级路径：向量不可用（无 key / 索引未就绪）时与纯关键词检索完全一致 ----</span>
+boolean vectorUsable = embeddingService != null &amp;&amp; embeddingService.available()
+        &amp;&amp; vectorIndexService != null &amp;&amp; vectorIndexService.ready();
+if (!vectorUsable) {
+    return keywordHits.stream().limit(topK).toList();
+}</code></pre>
+  </div>
+  <p>图谱路则更宽松——<code>graphService != null</code> 就启用，不依赖任何密钥。所以<strong>默认形态是"关键词 + 图谱"两路</strong>，配置了 embedding 密钥才升级为三路。</p>
+
+  <h3>引用校验闭环</h3>
+  <p>检索的终点不是返回结果，而是保证模型只能引用真实存在的来源：</p>
+  <div class="flow">
+    <div><b>1</b>search() 命中 → 写入 ctx.retrievedChunks</div>
+    <div><b>2</b>formatForModel() 只把命中项给模型看</div>
+    <div><b>3</b>submit_farm_plan 清洗非命中 evidence</div>
+    <div><b>4</b>ChatController 再洗一遍（纵深防御）</div>
+    <div><b>5</b>正文里的伪 ID 替换为提示</div>
+    <div><b>6</b>保存会话时从资料库重建卡片</div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 6 ═══════════════════════ -->
+<section id="s6">
+  <h2><span class="num">06</span>前端逐层精读</h2>
+  <p class="subtitle">2,335 行 TS/TSX。没有状态管理库，没有路由库，没有 UI 框架的组件库——只有 React 19 + 手写 CSS + 一个 Base UI 的 Select。</p>
+
+  <h3>入口与类型</h3>
+  <p><span class="file">main.tsx</span> 只有 11 行：把钱渲染到 <code>#root</code>，套一层 <code>StrictMode</code>。<span class="file">types.ts</span> 是自包含的共享类型——注释第一行就写明「不依赖后端」，这是一份手工维护的契约，改了后端 record 要记得同步改这里。</p>
+
+  <h3>lib/ — 四个模块</h3>
+
+  <h4>lib/api.ts — 基座</h4>
+  <p>45 行，做四件事：<code>PROVIDERS</code> 常量（四个供应商预设）、<code>readSettings()</code> 从 sessionStorage 读设置（带形状校验，损坏就回退默认）、<code>api&lt;T&gt;()</code> 统一 fetch 封装、<code>normalizeContext()</code> 把后端返回的上下文补齐默认值。</p>
+  <p><code>api()</code> 的 <span class="file">:22</span> 有个细节：<code>AbortError</code> 会原样抛出而不是转成"无法连接 Java 服务"——因为取消是正常流程，不该显示成网络错误。</p>
+
+  <h4>lib/chat.ts — 流式解析</h4>
+  <p>80 行，是全前端最需要小心的一块。三个导出函数：</p>
+
+  <p><strong><code>requestHistory()</code></strong>（<span class="file">:23</span>）把前端消息转成模型历史。两个动作：先 <code>filter()</code> 掉 <code>status:'interrupted'</code> 和 <code>degraded:true</code> 的消息（未完成的回答不能当作完整答案喂回去），再 <code>slice(-20)</code> 只留最近 20 条。然后把附件数据、此前的确认卡、方案、风险结果按特定格式拼进 content——每条都带一句声明，例如 <code>【此前生成的建议，未经用户确认执行】</code>。</p>
+
+  <p><strong><code>retryMessages()</code></strong>（<span class="file">:14</span>）决定"重试"重发什么。三种情况：最后一条是 user（说明请求根本没发出去）→ 原样重发；最后一条是失败/半完成的 assistant 且前一条是 user → <em>切掉最后一条 assistant</em>，重发那条 user；其余 → null（不可重试）。这就是"重试不产生重复问题"的实现。</p>
+
+  <p><strong><code>streamChat()</code></strong>（<span class="file">:35</span>）是 SSE 解析器。它要处理的问题比看上去多：</p>
+  <ul>
+    <li><strong>UTF-8 字节切分</strong>：中文字符可能被 TCP 分片从中间切开。<code>TextDecoder</code> 用 <code>{stream: !done}</code> 保证跨块的半个字符不被解码成乱码。</li>
+    <li><strong>CRLF 与多行 data</strong>：<code>replace(/\r$/, '')</code> 去掉行尾回车；多个 <code>data:</code> 行用 <code>\n</code> 拼接后再 <code>JSON.parse</code>（SSE 规范要求）。</li>
+    <li><strong>done 之前的一切都不算成功</strong>：循环条件是 <code>while (!result)</code>，只有收到 <code>done</code> 事件并校验了内容才 <code>return</code>。<code>done</code> 里还要再验一次：reply 非空、或至少有 plan/risk/clarify 之一，否则抛"模型没有返回有效内容"。</li>
+    <li><strong>提前 EOF</strong>：<code>if (done &amp;&amp; !result) throw new Error('回答连接中断，已收到的内容不是完整答案，可重试这条问题。')</code></li>
+    <li><strong>2MB 上限</strong>与 <code>finally</code> 里的 <code>reader.cancel()</code> 释放。</li>
+  </ul>
+
+  <h4>lib/clarification.ts — 确认卡的纯函数部分</h4>
+  <p>39 行，三个函数。<code>formatClarifyReply()</code> 把逐题答案拼成一条用户消息。注意它<strong>只拼用户真实回答的内容</strong>，不加任何连接性的话：</p>
+  <div class="codewrap">
+    <div class="cap"><b>clarification.ts:27–30</b><span>注释解释了为什么</span></div>
+<pre><code><span class="cm">// Assemble only the user's actual answers; do not have a model invent connective facts.</span>
+const reply = '我补充的信息如下：\n\n' + items.map((item, index) =&gt;
+  `${index + 1}. 问题：${item.question}\n回答：${answers[index].trim()}`,
+).join('\n\n') + '\n\n请结合以上信息继续分析，并给出下一步建议。';</code></pre>
+  </div>
+  <p><code>hasClarifyFollowUp()</code>（<span class="file">:36</span>）判断某张卡之后是否已经有用户消息——有就把卡置为只读。这让历史里的旧卡片不会再次被提交。</p>
+
+  <h3>components/ — 九个业务组件</h3>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>组件</th><th>行数</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><span class="file">clarify-card.tsx</span></td><td>71</td><td>确认卡：逐题单选 + 自填 + 暂不确定 + 统一提交</td></tr>
+      <tr><td><span class="file">plan-card.tsx</span></td><td>33</td><td>方案卡 + 风险卡（两个导出）</td></tr>
+      <tr><td><span class="file">source-card.tsx</span></td><td>32</td><td>资料依据卡</td></tr>
+      <tr><td><span class="file">context-panel.tsx</span></td><td>34</td><td>侧栏紧凑的定位 / 天气 / 时钟</td></tr>
+      <tr><td><span class="file">data-attach.tsx</span></td><td>24</td><td>农情数据粘贴与文件导入</td></tr>
+      <tr><td><span class="file">settings-dialog.tsx</span></td><td>49</td><td>供应商 / 模型 / 密钥设置与连接测试</td></tr>
+      <tr><td><span class="file">conversation-actions.tsx</span></td><td>36</td><td>会话重命名与删除</td></tr>
+      <tr><td><span class="file">workspace-views.tsx</span></td><td>484</td><td>田块页 + 任务页 + 资料页（三个视图挤在一个文件）</td></tr>
+      <tr><td><span class="file">field-sidebar.tsx</span></td><td>141</td><td><span class="pill no">未被引用</span> 早期版本的田块栏，已被 workspace-views 取代</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>几个设计意图明确的地方：</p>
+
+  <p><strong>确认卡强制逐题作答。</strong><span class="file">clarify-card.tsx:64</span> 的提交按钮 <code>disabled={locked || !items.length || answeredCount !== items.length}</code>——少答一题就点不动。而选项里永远自动追加一个「暂不确定」（<span class="file">:46</span>），保证用户不必被迫猜一个答案。</p>
+
+  <p><strong>方案卡容忍脏数据。</strong><span class="file">plan-card.tsx:6</span> 的 <code>evidenceIds()</code> 先判 <code>Array.isArray</code> 再逐个过滤字符串——因为 <code>evidence</code> 来自模型输出，运行时形状不可信。对应的测试用例名字就叫 <em>"plan card tolerates non-array evidence instead of crashing the page"</em>。</p>
+
+  <p><strong>风险卡不推断低风险。</strong><span class="file">plan-card.tsx:31</span> 注释：<code>Never infer low risk when tool output is missing or unparsable.</code> 拿不到结果就显示"未收到有效判读结果，无法确定风险"。</p>
+
+  <p><strong>资料页只读。</strong><span class="file">workspace-views.tsx:428</span> 的 <code>KnowledgeView</code> 展示来源登记，筛选条件里明确区分「已核验」与「未核验」，草稿会显示"没有可核验的原文链接：这是本地整理草稿，不能作为官方依据"。</p>
+
+  <h3>App.tsx — 449 行，21 个 useState</h3>
+  <p>整个应用的状态都集中在这个文件里。P0 报告明确说「大规模拆分<strong>有意推迟</strong>：拆分属独立重构，风险与收益不成比例」。所以读它时不要期待清晰的分层，要接受它是"能跑且被 35 个测试罩住"的集中式实现。</p>
+
+  <p>核心函数是 <code>send()</code>（<span class="file">:193–241</span>），一次完整的收发。骨架：</p>
+  <div class="codewrap">
+    <div class="cap"><b>App.tsx:193–241</b><span>一次发送的完整状态流转</span></div>
+<pre><code>async function send(retry = false, directReply?: string): Promise&lt;boolean&gt; {
+  <span class="cm">// ① 六道前置闸门，任何一道不通过就根本不发请求</span>
+  if (sendingRef.current || conversationBusyRef.current || !ready) return false;
+  if (!settings.apiKey || !settings.model) { setSettingsOpen(true); return false; }
+  if (saveError) { setChatError('请先重试保存当前对话，避免丢失已有内容。'); return false; }
+  if (current.messages.length &gt;= 490) { … }
+
+  <span class="cm">// ② 组装消息。directReply 是确认卡提交的路径——它自带完整消息，</span>
+  <span class="cm">//    所以不能覆盖输入框草稿，也不能把附件再带一遍</span>
+  const messages = retry ? previous : [...previous, { …, requestContext: captureContext(activeField, …) }];
+
+  <span class="cm">// ③ 乐观落一条 interrupted 占位并持久化</span>
+  const pending = interrupted('上次回答尚未完成，可重试这条问题。');
+  setCurrent(pending);
+  await persist(pending);            <span class="cm">// ← 先保存再调用模型</span>
+
+  <span class="cm">// ④ 流式请求，事件回调里维护 partial 与 streamStatus</span>
+  const result = await streamChat({...}, controller.signal, ({event, data}) =&gt; {
+    if (event === 'reset') { partial = ''; setStreamText(''); }
+    if (event === 'delta') { partial += data.text; setStreamText(partial); … }
+    if (event === 'status') setStreamStatus(data.text);
+  });
+
+  <span class="cm">// ⑤ 组装完成消息并保存；保存失败不丢屏幕内容，只挂 saveError</span>
+  const completed = { …messages, { …, plan, risk, clarify, sources, degraded } };
+  setCurrent(completed);
+  try { await persist(completed); } catch (e) { setSaveError(errorText(e)); }
+}</code></pre>
+  </div>
+
+  <p>三个不那么显眼但重要的机制：</p>
+
+  <p><strong>保存串行化。</strong><code>saveChain</code>（<span class="file">:180</span>）是一条 Promise 链：</p>
+  <div class="codewrap">
+    <div class="cap"><b>App.tsx:181–191</b><span>防止迟到的旧响应覆盖新消息</span></div>
+<pre><code>const saveChain = useRef&lt;Promise&lt;unknown&gt;&gt;(Promise.resolve());
+async function persist(conversation: Conversation) {
+  const run = async () =&gt; { … };
+  const next = saveChain.current.then(run, run);   <span class="cm">// 前一个失败也要继续排队，不能卡死链条</span>
+  saveChain.current = next.catch(() =&gt; {});
+  return next;
+}</code></pre>
+  </div>
+
+  <p><strong>上下文快照。</strong><code>captureContext()</code>（<span class="file">lib/chat.ts:6</span>）在发问那一刻把田块与天气冻结成一份快照挂在用户消息上。<code>structuredClone</code> 保证之后修改田块不会影响已发出问题的快照。重试时复用同一份快照（<code>messages.at(-1)?.requestContext</code>，<span class="file">:206</span>）。</p>
+
+  <p><strong>滚动跟随。</strong><span class="file">:412</span> 的 <code>onScroll</code> 判断用户是否还在底部附近（&lt;100px）：是就跟随，不是就让用户安静地向上读。而 <code>useEffect</code> 里用 <code>behavior:'instant'</code> 而不是 <code>'smooth'</code>——注释解释了原因：<em>每来一个 delta 就重启一次平滑动画，视图会永远追不上</em>。</p>
+
+  <div class="note"><span class="tag">一个值得学的细节</span>
+  <p><span class="file">App.tsx:107</span> 的滚动有降级：<code>if (typeof el.scrollTo === 'function') el.scrollTo({...}) else el.scrollTop = el.scrollHeight</code>。注释说「Older engines (and the JSDOM test DOM) have no Element.scrollTo」——这一行让同一个组件在浏览器和 JSDOM 里都能跑。</p>
+  </div>
+
+  <h3>样式</h3>
+  <p><span class="file">styles/globals.css</span> 247 行，手写 CSS（Tailwind 装了但业务样式基本没用它）。类名统一 <code>nx-</code> 前缀。设计语言直接对应 PROJECT_BRIEF 的定位：深墨绿侧栏、米纸白工作区、朱砂橙点缀。</p>
+  <p>值得注意的是 <span class="file">components/ui/</span> 里那几个文件：<code>button.tsx</code> / <code>input.tsx</code> / <code>select.tsx</code> 是 shadcn 脚手架带进来的，<strong>业务代码没用它们</strong>——只有 <code>dialog.tsx</code>（含 button）和 <code>nx-select.tsx</code> 在实际使用。<code>select.tsx</code> 202 行完全是死代码。</p>
+</section>
+
+<!-- ═══════════════════════ 7 ═══════════════════════ -->
+<section id="s7">
+  <h2><span class="num">07</span>红线与不变量</h2>
+  <p class="subtitle">改代码前先过一遍这十条。踩中任何一条，改动大概率会被推翻或引入回归。</p>
+
+  <ol>
+    <li><strong>依据只能来自本次（或本会话此前）真实检索命中的 chunkId。</strong>防线共五层，任何一层都不能绕过。新增任何"生成依据"的路径都必须接进白名单校验。</li>
+    <li><strong>任务状态推进必须由用户提交的事实驱动。</strong><code>completed</code> 与 <code>awaiting_review</code> 不能通过 <code>changeStatus</code> 到达。AI 不能宣告任务完成。</li>
+    <li><strong>测试绝不能连真实数据库。</strong>所有 <code>@SpringBootTest</code> 必须用 <code>@DynamicPropertySource</code> 指向临时 SQLite 文件。历史上 <code>CostGuardTest</code> 曾写进用户真实库的 <code>answer_cache</code> 表。</li>
+    <li><strong>数据库结构变更走 <code>SchemaMigrationService</code>，不要删库。</strong>每一步必须幂等（用 <code>columnExists</code> / <code>tableExists</code> 先判断）。升级前会自动备份到 <code>server/data/backup/</code>。</li>
+    <li><strong>密钥不落地。</strong>只存 sessionStorage；不写数据库、源码、日志、导出文件。<code>ConversationController.rejectPrivateKeys()</code> 是最后一道闸。<strong>测试密钥也不要写进任何文件。</strong></li>
+    <li><strong>未核验 = 未核验。</strong>本地草稿的 <code>reviewStatus</code> 必须保持 <code>unverified</code>，UI 上必须显示"本地草稿 · 未核验"。只有逐条对照原文才能改状态。</li>
+    <li><strong>缺数据就写"待确认"，不补造。</strong>用量、物料、时间窗口缺失时保持「待确认」字样，不要在对话里补一个看起来合理的值。</li>
+    <li><strong>未完成的回答不进上下文。</strong><code>status:'interrupted'</code> 与 <code>degraded:true</code> 的消息必须被 <code>requestHistory()</code> 过滤掉。前端与后端各有一处这样的过滤。</li>
+    <li><strong>确认卡逐题保留答案。</strong>不能退化成"点一下选项就发出去"。必须支持自填与"暂不确定"，必须合并成一条完整用户消息。</li>
+    <li><strong>外部依赖全部可降级。</strong>向量、图谱、天气、地理编码、缓存、用量计数——任何一个挂掉都不能阻断主流程。新增外部调用时照这个模式写。</li>
+  </ol>
+</section>
+
+<!-- ═══════════════════════ 8 ═══════════════════════ -->
+<section id="s8">
+  <h2><span class="num">08</span>测试体系</h2>
+  <p class="subtitle">后端 110 条、前端 35 条。全部离线可跑，不调用真实模型，不读写用户数据库。</p>
+
+  <h3>后端 13 个测试类</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>测试类</th><th>条数</th><th>覆盖什么</th></tr></thead>
+    <tbody>
+      <tr><td><span class="file">ChatControllerTest</span></td><td>18</td><td>20 条窗口、消息上限、429、degraded、提示词断言</td></tr>
+      <tr><td><span class="file">CompletionStreamTest</span></td><td>16</td><td>流式分片、CRLF、心跳、结束原因、体量上限、取消</td></tr>
+      <tr><td><span class="file">KnowledgeLibraryTest</span></td><td>12</td><td>检索用例（含人工核验的 15 条）、作物过滤、负例</td></tr>
+      <tr><td><span class="file">AgriToolsTest</span></td><td>12</td><td>工具行为、evidence 清洗、跨作物</td></tr>
+      <tr><td><span class="file">AgentRunnerTest</span></td><td>12</td><td>多轮、强制工具轮、JSON 兼容、401/429/5xx、degraded</td></tr>
+      <tr><td><span class="file">RiskServiceImplTest</span></td><td>8</td><td>R0–R5 六条规则、单位换算、指标串扰</td></tr>
+      <tr><td><span class="file">WorkspaceApiIntegrationTest</span></td><td>8</td><td>真实 HTTP 往返（临时库）</td></tr>
+      <tr><td><span class="file">ConversationServiceTest</span></td><td>6</td><td>interrupted/degraded 持久化、重命名、删除</td></tr>
+      <tr><td><span class="file">TaskFlowIntegrationTest</span></td><td>6</td><td>P2 全链路：登记→确认→执行→复查；四条负路径</td></tr>
+      <tr><td><span class="file">ChatStreamIntegrationTest</span></td><td>4</td><td>SSE 事件流、错误事件、旧接口 JSON</td></tr>
+      <tr><td><span class="file">SchemaMigrationServiceTest</span></td><td>3</td><td>幂等、备份、done→status 并轨</td></tr>
+      <tr><td><span class="file">RagPipelineTest</span></td><td>3</td><td>三路检索全链路（临时库）</td></tr>
+      <tr><td><span class="file">CostGuardTest</span></td><td>2</td><td>成本护栏（临时库）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>前端 5 个测试文件</h3>
+  <p>JSDOM + <code>@testing-library/react</code> + node:test。<span class="file">tests/setup.ts</span> 里有几处环境补丁值得知道：</p>
+  <ul>
+    <li>绑定 <code>requestAnimationFrame</code> / <code>cancelAnimationFrame</code>（弹窗动画需要）</li>
+    <li><strong>短路 <code>:modal</code> 与 <code>:fullscreen</code> 伪类</strong>。这是一个很深的坑：jsdom 26 的 nwsapi 把这俩实现成对 <code>element.matches()</code> 的回调，而 <code>@floating-ui</code> 定位弹层时会调用 <code>matches(':modal')</code>——两者互相递归到栈溢出再被吞掉重试，导致任何打开自绘弹层的用例卡 1–3 分钟。<code>chat.test.tsx</code> 单文件因此从 265 秒降到约 11 秒。</li>
+  </ul>
+
+  <h4>用例命名本身就是文档</h4>
+  <p>这套测试的可读性很高，用例名直接描述行为而不是方法名。摘几条：</p>
+  <ul class="small">
+    <li><em>"stream EOF and error events never count as completed answers"</em></li>
+    <li><em>"partial output is visible before done; stop persists interruption; retry sends only one original question"</em></li>
+    <li><em>"saves are serialised so a late response cannot overwrite newer messages"</em></li>
+    <li><em>"a task is confirmed, then completed only through execution and review records"</em></li>
+    <li><em>"plan card tolerates non-array evidence instead of crashing the page"</em></li>
+    <li><em>"a fourth question is not silently dropped"</em></li>
+  </ul>
+  <p>最后一条尤其好：确认卡最多 3 题，如果模型返回 4 题怎么办？测试保证第 4 题<em>不会被静默丢弃</em>。</p>
+
+  <h3>实测结果（我本次运行）</h3>
+  <div class="cards">
+    <div class="card"><i>前端 npm test</i><b>35 / 35</b><span>7.5 秒，0 失败 0 跳过</span></div>
+    <div class="card"><i>后端 mvn test</i><b>110 / 110</b><span>13 个测试类全绿，0 失败 0 错误</span></div>
+    <div class="card"><i>数据隔离</i><b>未被触碰</b><span>日志显示测试库建在系统临时目录，真实库无写入</span></div>
+  </div>
+  <p class="small muted">后端跑测时日志里能看到 <code>结构已从 v1 升级到 v2，迁移前备份：C:\Users\…\Temp\junit…\backup\nongxin-v1-….db</code>——备份落在 JUnit 的临时目录而不是 <code>server/data/</code>，这是"测试不碰真实库"这条约束生效的直接证据。</p>
+
+  <div class="note"><span class="tag">数字会漂</span>
+  <p>不同文档里的测试数不一致：P0 报告写「前端 19/19、后端 67/67」，P2 报告写「前端 29/29、后端 110/110」，我这次实测前端是 35/35。这说明测试在持续增加而文档没有同步回填。<strong>引用数字时以自己跑出来的为准。</strong></p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 9 ═══════════════════════ -->
+<section id="s9">
+  <h2><span class="num">09</span>我实测发现的出入</h2>
+  <p class="subtitle">通读过程中我实际调用了正在运行的后端，发现几处文档与代码/现实对不上的地方。这些不是猜的，都有命令与输出。</p>
+
+  <h3>9.1 README 的检索数字无法用现有接口复现</h3>
+  <p>这是最重要的一处。README 第 93 行称：</p>
+  <div class="note"><span class="tag">README 原文</span>
+  <p>「同一评估集下，关键词 Top3 命中率 <strong>25.0%（3/12）→ 三路混合 91.7%（11/12）</strong>；该数据为本地哈希向量模式（离线可跑）测得。」</p>
+  </div>
+  <p>但我对正在运行的后端调用评估接口，得到的实际结果是：</p>
+  <div class="codewrap">
+    <div class="cap"><b>POST /api/kb/eval?depth=3 与 depth=5</b><span>本机实测，2026-09-11</span></div>
+<pre><code>depth=3  literal : 25.0% (2/8) -&gt; 25.0% (2/8)   semantic: 75.0% (3/4) -&gt; 75.0% (3/4)
+depth=5  literal : 25.0% (2/8) -&gt; 25.0% (2/8)   semantic: 75.0% (3/4) -&gt; 75.0% (3/4)
+note: 当前未启用向量路：hybrid 列与 keyword 列相同（纯关键词检索）。
+vectorKind: none | vectorReady: false | indexedModel: local-hash-ngram-256</code></pre>
+  </div>
+  <p>三个问题叠在一起：</p>
+  <ul>
+    <li><strong>数字对不上。</strong>现在的口径把 12 条用例拆成 8 条 literal + 4 条 semantic 分开统计，而 README 用的是合并的 3/12 与 11/12。两套分母不同。</li>
+    <li><strong>"关键词 25%"这个数字现在对应的是 literal 子集（2/8），不是全部 12 条。</strong>全量关键词命中实际是 5/12 ≈ 41.7%，因为 4 条 semantic 用例里有 3 条居然被纯关键词命中了。</li>
+    <li><strong>91.7% 在当前代码下无法复现。</strong>修正后的评估代码明确<em>不把本地哈希向量在 semantic 类上的命中计入成绩</em>（<span class="file">RetrievalEvalController.java:95</span>），所以本地哈希模式的理论上限只有 literal 那 8 条。91.7% 应该来自口径修正<strong>之前</strong>的旧评估代码。</li>
+  </ul>
+  <p>有意思的是，<span class="file">docs/P1-检索用例与来源登记.md</span> 最后一节已经解释过这两组数字口径不同，<span class="file">docs/RAG-评估方法与口径.md</span> 更是专门写了一节「在配置真实语义模型之前，任何"命中率提升"的数字都只能表述为「检索管线自检结果」，不得作为"语义检索效果"写入方案或答辩材料」。<strong>也就是说：口径文档已经修正了，但 README 的这句话没有跟着改。</strong>如果这份材料要提交或答辩，README 第 93 行是当前的合规风险点。</p>
+
+  <div class="note warn"><span class="tag">另一处状态</span>
+  <p>同一个接口显示 <code>embeddingConfigured: false</code>——当前运行的后端<strong>没有配置 embedding 密钥</strong>，所以实际跑的是纯关键词（+ 图谱）。而 <code>kb_vectors</code> 表里躺着 44 条 <code>local-hash-ngram-256</code> 的向量，是之前本地哈希模式留下的。这两件事不矛盾（<code>ready()</code> 要求模型名一致，当前模型是 <code>BAAI/bge-m3</code> 所以不 ready），但如果你在材料里写"已启用向量检索"，与运行现状不符。</p>
+  </div>
+
+  <h3>9.2 七条 literal 用例全部落空——原因不是算法</h3>
+  <p>我把失败明细打出来了：</p>
+  <div class="codewrap">
+    <div class="cap"><b>评估失败用例明细（depth=5）</b><span>keywordTop 全部为空数组</span></div>
+<pre><code>✗ literal  | 叶子像被开水烫过一样发白枯萎      | 期望: 稻瘟/叶瘟      | 实得: []
+✗ literal  | 稻丛基部一层小白虫，一碰就飞起来    | 期望: 飞虱          | 实得: []
+✗ literal  | 稻叶上有一圈圈像云彩的花纹        | 期望: 纹枯/云纹      | 实得: []
+✗ literal  | 麦叶上一道道黄粉，抹一下手上全是粉  | 期望: 锈            | 实得: []
+✗ literal  | 麦子还没熟就干枯发白了           | 期望: 干热风/逼熟    | 实得: []
+✗ literal  | 打完药叶子反而焦了              | 期望: 药害/烧叶      | 实得: []
+✗ semantic | 田里一片一片地瘫倒，茎基发黑       | 期望: 倒伏/纹枯      | 实得: []</code></pre>
+  </div>
+  <p>注意「实得」全是空数组——<strong>不是排错了，是一条都没召回</strong>。这符合设计：<code>headlineHit()</code> 要求标题或关键词级命中，而"叶子像被开水烫过"里的 2-gram 没有一个落在任何片段的标题或关键词里。前 6 条正是设计上要靠向量路接住的口语化提问。而最后一条（倒伏）没人接得住，是因为<em>资料库里根本没有倒伏主题的已核验原文</em>——P1 报告也承认这是内容缺口而非算法问题。</p>
+  <p>换句话说：<strong>当前纯关键词形态下，口语化提问的召回率接近零，这是当前运行状态的真实表现。</strong>不配 embedding 密钥的话，README 里描述的"能接住口语化表述"这个卖点是不成立的。</p>
+
+  <h3>9.3 三处小的文档/代码漂移</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>项</th><th>文档写的</th><th>代码实际</th></tr></thead>
+    <tbody>
+      <tr><td>前端测试数</td><td>P2 报告 29/29</td><td>实测 35/35</td></tr>
+      <tr><td>未使用的组件</td><td>—</td><td><span class="file">field-sidebar.tsx</span>(141 行) 与 <span class="file">ui/select.tsx</span>(202 行) 无任何引用，是死代码</td></tr>
+      <tr><td>生育期推算</td><td>README 只提一处</td><td>前后端各有一份独立实现，表内容近乎重复</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>9.4 已知的功能缺口（文档自己承认的）</h3>
+  <p>P2 报告 7.5 节记录了一个未修的问题：真实模型联调第三轮，模型给出了明确可执行的动作，<strong>却没有调用 <code>submit_farm_plan</code></strong>——用户因此拿不到「加入任务」的入口，只拿到一张确认卡。报告分析的原因是"模型想先知道第一次用的是什么药"，与提示词里"缺信息也要提交处方单"存在张力，标注为"需要改进但不阻塞验收"。</p>
+</section>
+
+<!-- ═══════════════════════ 10 ═══════════════════════ -->
+<section id="s10">
+  <h2><span class="num">10</span>上手清单</h2>
+
+  <h3>想跑起来</h3>
+  <div class="codewrap">
+    <div class="cap"><b>启动</b><span>双击根目录的 启动农心.bat 是最省事的</span></div>
+<pre><code><span class="cm"># 方式一：一键（自动补 JAVA_HOME、按需打包、检测端口占用、开两个窗口）</span>
+双击  D:\aic\启动农心.bat
+
+<span class="cm"># 方式二：手动，两个终端</span>
+cd D:\aic            &amp;&amp; npm install &amp;&amp; npm run dev            <span class="cm"># 前端 3000</span>
+cd D:\aic\server     &amp;&amp; mvn package &amp;&amp; java -Dfile.encoding=UTF-8 -jar target/nongxin-agent.jar
+
+<span class="cm"># 浏览器打开 http://localhost:3000 → 右上角「模型设置」填供应商/模型/Key</span></code></pre>
+  </div>
+  <div class="note warn"><span class="tag">两个反复踩的坑</span>
+  <p>① 后端必须<strong>从 <code>server</code> 目录启动</strong>——数据库路径是相对的。<br>
+  ② 重新打包前先停掉正在运行的 jar，否则 Windows 会锁住 <code>target\nongxin-agent.jar</code>。</p>
+  </div>
+
+  <h3>常用检查命令</h3>
+  <div class="codewrap">
+    <div class="cap"><b>验证</b><span>分开执行，别让最后一条成功命令掩盖前面的失败</span></div>
+<pre><code>npm test                                         <span class="cm"># 前端，约 8 秒</span>
+npx tsc --noEmit                                 <span class="cm"># 类型</span>
+npx tsc -p frontend/tsconfig.test.json --noEmit  <span class="cm"># 测试文件的类型</span>
+npm run lint                                     <span class="cm"># oxlint</span>
+npm run build                                    <span class="cm"># 产物到 frontend/dist</span>
+
+cd server &amp;&amp; mvn test                             <span class="cm"># 后端</span></code></pre>
+  </div>
+
+  <h3>调试用的运维接口</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>接口</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/health</code></td><td>服务是否活着</td></tr>
+      <tr><td><code>GET /api/kb/status</code></td><td>片段数、已索引数、当前模型、<strong>vectorReady</strong>、图谱规模</td></tr>
+      <tr><td><code>POST /api/kb/reindex</code></td><td>重建向量索引（可在 body 里带 <code>apiKey</code>）</td></tr>
+      <tr><td><code>POST /api/kb/eval?depth=5</code></td><td>检索效果评估，含逐条明细</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small muted">另外，<span class="file">server/data/nongxin.log</span> 里的 <code>chat 完成：rounds=… submissions=[…] degraded=… sources=…</code> 这一行，是判断"模型是否按预期调用了工具"最快的入口。验收手册建议：任何改动提示词或工具返回值的提交，都应重跑 T1/T3 与"方案卡→加入任务"这条主链路，并检查这行日志。</p>
+
+  <h3>如果让我接着做，优先级排序</h3>
+  <ol>
+    <li><strong>修 README 第 93 行的检索数字</strong>（第 9.1 节）。这是合规风险，成本最低、收益最直接。</li>
+    <li><strong>配一个真实的 embedding 密钥并复测</strong>。这是 P1 承诺的核心能力（口语化召回），目前运行态下是关闭的。</li>
+    <li><strong>处理 P2 报告 7.5 的提示词张力</strong>：让"信息不足"时也走 <code>submit_farm_plan</code>（缺的字段填"待确认"），而不是退回追问——否则用户拿不到加入任务的入口。</li>
+    <li><strong>清死代码</strong>：<code>field-sidebar.tsx</code>、<code>ui/select.tsx</code>、<code>ui/input.tsx</code>。</li>
+    <li><strong>合并前后端两份生育期表</strong>（或明确谁是唯一事实源）。</li>
+    <li><strong>把系统提示词从 Java 字符串里挪出来</strong>（资源文件或数据库），让改提示词不需要重新打包——这项是 P3/P4 之后的事，但它目前是迭代速度的最大瓶颈。</li>
+  </ol>
+</section>
+
+<footer>
+  <p>本文档由全量通读 <code>D:\aic</code> 的 7,835 行 Java 与 2,335 行 TS/TSX 后写成；第 8 节的测试结果与第 9 节的全部结论，均来自本次实际运行与对正在运行的后端（127.0.0.1:8080）的实际调用，非推测。</p>
+  <p class="muted">生成位置：<code>docs/项目解析-代码导读.html</code></p>
+</footer>
+
+</main>
+</div>

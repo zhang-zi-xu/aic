@@ -51,6 +51,7 @@ class WorkspaceApiIntegrationTest {
 
     @BeforeEach
     void clearTestData() {
+        jdbc.update("DELETE FROM task_records");
         jdbc.update("DELETE FROM farm_tasks");
         jdbc.update("DELETE FROM conversations");
         jdbc.update("DELETE FROM field_records");
@@ -64,7 +65,13 @@ class WorkspaceApiIntegrationTest {
                 .andExpect(jsonPath("$.service").value("nongxin-api"));
         mvc.perform(get("/api/knowledge")).andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").isString()).andExpect(jsonPath("$[0].title").isString())
-                .andExpect(jsonPath("$[0].crop").isString()).andExpect(jsonPath("$[0].source").isString());
+                .andExpect(jsonPath("$[0].reviewStatus").value("verified"))
+                .andExpect(jsonPath("$[0].institution").isString())
+                .andExpect(jsonPath("$[0].url").isString())
+                .andExpect(jsonPath("$[0].publishedAt").isString())
+                .andExpect(jsonPath("$[0].crops[0]").isString())
+                .andExpect(jsonPath("$[5].reviewStatus").value("unverified"))
+                .andExpect(jsonPath("$[5].url").doesNotExist());
         for (String path : List.of("fields", "tasks", "conversations")) {
             mvc.perform(get("/api/" + path)).andExpect(status().isOk()).andExpect(content().json("[]"));
         }
@@ -106,17 +113,17 @@ class WorkspaceApiIntegrationTest {
         createField("f-tasks");
         Map<String, Object> task = task("t-persisted", "f-tasks");
         mvc.perform(post("/api/tasks").contentType("application/json").content(json.writeValueAsString(task)))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.done").value(false))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("pending"))
+                .andExpect(jsonPath("$.statusLabel").value("待执行"))
                 .andExpect(jsonPath("$.date").value(""));
-        task.put("done", true);
         task.put("note", "已检查并记录");
         task.put("createdAt", "2030-01-01T00:00:00Z");
         mvc.perform(put("/api/tasks/t-persisted").contentType("application/json").content(json.writeValueAsString(task)))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.done").value(true))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.note").value("已检查并记录"))
                 .andExpect(jsonPath("$.createdAt").value("2026-09-06T00:00:00Z"));
-        TaskService reopened = new TaskService(freshDatabaseConnection());
+        TaskService reopened = new TaskService(freshDatabaseConnection(), json, new com.nongxin.service.CurrentUser());
         FarmTask persisted = reopened.get("t-persisted");
-        assertThat(persisted.done()).isTrue();
+        assertThat(persisted.status()).isEqualTo("pending");
         assertThat(persisted.note()).isEqualTo("已检查并记录");
         assertThat(persisted.date()).isEmpty();
         assertThat(persisted.sourceMessageId()).isEqualTo("m-plan");
@@ -151,7 +158,7 @@ class WorkspaceApiIntegrationTest {
         mvc.perform(get("/api/fields/f-duplicate")).andExpect(jsonPath("$.name").value("试验田"));
         Map<String, Object> task = task("t-duplicate", null);
         mvc.perform(post("/api/tasks").contentType("application/json").content(json.writeValueAsString(task)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
         task.put("title", "不得覆盖原任务");
         mvc.perform(post("/api/tasks").contentType("application/json").content(json.writeValueAsString(task)))
                 .andExpect(status().isConflict());
@@ -168,7 +175,7 @@ class WorkspaceApiIntegrationTest {
                 .andExpect(jsonPath("$.apiKey").doesNotExist()).andExpect(jsonPath("$.settings").doesNotExist());
         String stored = jdbc.queryForObject("SELECT messages_json FROM conversations WHERE id='c-saved'", String.class);
         assertThat(stored).doesNotContain("fake-do-not-store", "apiKey", "settings");
-        ConversationService reopened = new ConversationService(freshDatabaseConnection(), json);
+        ConversationService reopened = new ConversationService(freshDatabaseConnection(), json, new com.nongxin.service.CurrentUser());
         assertThat(reopened.get("c-saved").messages().getFirst().plan()).containsKey("items");
         body.put("title", "更新标题");
         body.put("createdAt", "2030-01-01T00:00:00Z");
@@ -185,10 +192,28 @@ class WorkspaceApiIntegrationTest {
     }
 
     @Test
+    void savedSourceCardsAreRebuiltFromTheLibraryAndCannotBeForged() throws Exception {
+        Map<String, Object> body = conversation("c-sources", null);
+        body.put("messages", List.of(Map.of("id", "m-1", "role", "assistant", "content", "回答内容",
+                "sources", List.of(
+                        Map.of("id", "chunk-pest-rice-blast", "status", "unverified", "title", "伪造标题",
+                                "url", "javascript:alert(1)"),
+                        Map.of("id", "chunk-not-in-library", "status", "verified", "url", "https://evil.example")))));
+
+        mvc.perform(put("/api/conversations/c-sources").contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[0].sources.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].sources[0].id").value("chunk-pest-rice-blast"))
+                .andExpect(jsonPath("$.messages[0].sources[0].status").value("verified"))
+                .andExpect(jsonPath("$.messages[0].sources[0].title").value("2025年粮食作物重大病虫害防控技术方案"))
+                .andExpect(jsonPath("$.messages[0].sources[0].url").value("https://www.moa.gov.cn/xw/zxfb/202502/t20250228_6470753.htm"));
+    }
+
+    @Test
     void fieldDeletionRetainsTaskAndConversationContentWithNoDanglingFieldLink() throws Exception {
         createField("f-delete");
         mvc.perform(post("/api/tasks").contentType("application/json").content(json.writeValueAsString(task("t-kept", "f-delete"))))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
         mvc.perform(put("/api/conversations/c-kept").contentType("application/json")
                 .content(json.writeValueAsString(conversation("c-kept", "f-delete")))).andExpect(status().isOk());
         mvc.perform(delete("/api/fields/f-delete")).andExpect(status().isOk());
@@ -226,7 +251,7 @@ class WorkspaceApiIntegrationTest {
         result.put("condition", "观察田间积水情况后决定");
         result.put("method", "现场巡查");
         result.put("review", "记录检查结果");
-        result.put("done", false);
+        result.put("status", "pending");
         result.put("createdAt", "2026-09-06T00:00:00Z");
         result.put("sourceMessageId", "m-plan");
         return result;
