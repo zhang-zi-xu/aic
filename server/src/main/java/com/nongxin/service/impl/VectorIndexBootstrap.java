@@ -11,7 +11,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * 启动时自动建立向量索引（后台线程，不阻塞服务启动）。
- * 未配置 embedding key 或索引已就绪时跳过；失败不影响服务可用性。
+ *
+ * <p>触发条件（满足其一就重建）：索引为空、**索引条数与当前资料库片段数不一致**（说明资料库新增或删除了来源）、
+ * 或索引模型与当前 embedding 模型不同。之前只判断"已就绪就跳过"，导致新入库的官方文件永远进不了向量索引——
+ * 库里明明有资料却检索不到（2026-09-18 入库 30 个片段后实测到的问题）。
  */
 @Component
 public class VectorIndexBootstrap {
@@ -34,10 +37,13 @@ public class VectorIndexBootstrap {
             log.info("跳过向量索引：未配置 embedding 密钥（检索将使用纯关键词模式）");
             return;
         }
-        if (vectorIndex.ready()) {
-            log.info("向量索引已就绪：{} 条（model={}）", vectorIndex.indexedCount(), vectorIndex.indexedModel());
+        int expected = library.chunks().size();
+        int indexed = vectorIndex.indexedCount();
+        if (vectorIndex.ready() && indexed == expected) {
+            log.info("向量索引已就绪：{} 条（model={}）", indexed, vectorIndex.indexedModel());
             return;
         }
+        log.info("向量索引需要重建：库内 {} 条，资料库片段 {} 条", indexed, expected);
         Thread worker = new Thread(() -> {
             try {
                 long start = System.currentTimeMillis();

@@ -1,5 +1,7 @@
 package com.nongxin.agent;
 
+import com.nongxin.service.CurrentUser;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +45,9 @@ public class ToolRegistry {
         if (tool == null) return "错误：工具 " + name + " 不存在";
         try {
             return tool.executor().apply(args == null ? Map.of() : args, ctx);
+        } catch (CurrentUser.IdentityUnavailable e) {
+            // Identity failure is not a tool-argument problem that the model may retry or reason around.
+            throw e;
         } catch (Exception e) {
             return "工具执行失败：" + e.getMessage();
         }

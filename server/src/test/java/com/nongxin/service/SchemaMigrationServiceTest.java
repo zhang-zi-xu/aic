@@ -141,11 +141,12 @@ class SchemaMigrationServiceTest {
         assertThat(restored.queryForObject("SELECT COUNT(*) FROM fields", Integer.class)).isEqualTo(1);
         assertThat(restored.queryForObject("SELECT COUNT(*) FROM conversations", Integer.class)).isEqualTo(1);
 
-        // 再启动两次 → 三份快照；人为塞到 12 份后只保留最近 10 份
+        // 再启动两次 → 三份快照；用已完成的真实快照补到 12 份后只保留最近 10 份。
+        // 文本/损坏文件不再被当作可删除的数据库备份。
         migrate(jdbc, database);
         migrate(jdbc, database);
         Path dir = tempDir.resolve("backup");
-        for (int i = 0; i < 9; i++) Files.writeString(dir.resolve("startup-v2-19990101-00000" + i + ".db"), "old");
+        for (int i = 0; i < 9; i++) Files.copy(snapshot, dir.resolve("startup-v5-19990101-00000" + i + ".db"));
         migrate(jdbc, database);
         try (Stream<Path> files = Files.list(dir)) {
             assertThat(files.filter(path -> path.getFileName().toString().startsWith("startup-")).count()).isEqualTo(10);

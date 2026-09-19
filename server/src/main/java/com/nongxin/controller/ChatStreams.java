@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -38,11 +39,22 @@ public class ChatStreams {
             try {
                 observer.event("status", Map.of("text", "请求已接收…"));
                 ResponseEntity<?> result = work.apply(observer);
-                observer.event(result.getStatusCode().is2xxSuccessful() ? "done" : "error", result.getBody());
+                if (result.getStatusCode().is2xxSuccessful()) {
+                    observer.event("done", result.getBody());
+                } else {
+                    // The SSE HTTP response is already 200; retain the logical error status in its event.
+                    Map<String, Object> error = new LinkedHashMap<>();
+                    if (result.getBody() instanceof Map<?, ?> body) {
+                        body.forEach((key, value) -> { if (key instanceof String name) error.put(name, value); });
+                    }
+                    error.putIfAbsent("error", "对话暂时不可用，请稍后重试");
+                    error.put("status", result.getStatusCode().value());
+                    observer.event("error", error);
+                }
                 emitter.complete();
             } catch (CancellationException ignored) { emitter.complete(); }
             catch (Exception e) {
-                try { observer.event("error", Map.of("error", "对话暂时不可用，请稍后重试")); }
+                try { observer.event("error", Map.of("error", "对话暂时不可用，请稍后重试", "status", 500)); }
                 catch (CancellationException ignored) { /* disconnected */ }
                 emitter.complete();
             } finally { closed.set(true); }

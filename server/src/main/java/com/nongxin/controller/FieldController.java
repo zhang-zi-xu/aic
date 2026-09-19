@@ -3,6 +3,7 @@ package com.nongxin.controller;
 import com.nongxin.model.FieldProfile;
 import com.nongxin.model.FieldRecord;
 import com.nongxin.service.FieldService;
+import com.nongxin.service.CurrentUser;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -26,54 +27,66 @@ import java.util.Map;
 public class FieldController {
 
     private final FieldService fieldService;
+    private final CurrentUser currentUser;
 
-    public FieldController(FieldService fieldService) {
+    public FieldController(FieldService fieldService, CurrentUser currentUser) {
         this.fieldService = fieldService;
+        this.currentUser = currentUser;
     }
 
     @GetMapping
     public List<FieldProfile> list() {
-        return fieldService.list();
+        return currentUser.withSnapshot(currentUser.capture(), fieldService::list);
     }
 
     @PostMapping
     public ResponseEntity<?> create(@RequestBody FieldProfile field) {
-        validate(field);
-        if (field.id() != null && !field.id().isBlank()) RequestValidation.id(field.id());
-        return ResponseEntity.ok(fieldService.create(field));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            validate(field);
+            if (field.id() != null && !field.id().isBlank()) RequestValidation.id(field.id());
+            return ResponseEntity.ok(fieldService.create(field));
+        });
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<?> get(@PathVariable String id) {
-        FieldProfile field = fieldService.get(id);
-        return field == null ? error(HttpStatus.NOT_FOUND, "田块不存在") : ResponseEntity.ok(field);
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            FieldProfile field = fieldService.get(id);
+            return field == null ? error(HttpStatus.NOT_FOUND, "田块不存在") : ResponseEntity.ok(field);
+        });
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable String id, @RequestBody FieldProfile field) {
-        RequestValidation.matchingId(id, field.id());
-        validate(field);
-        FieldProfile updated = fieldService.update(id, field);
-        return updated == null ? error(HttpStatus.NOT_FOUND, "田块不存在") : ResponseEntity.ok(updated);
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            RequestValidation.matchingId(id, field.id());
+            validate(field);
+            FieldProfile updated = fieldService.update(id, field);
+            return updated == null ? error(HttpStatus.NOT_FOUND, "田块不存在") : ResponseEntity.ok(updated);
+        });
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
-        boolean deleted = fieldService.delete(id);
-        if (!deleted) return error(HttpStatus.NOT_FOUND, "田块不存在");
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("deleted", true);
-        return ResponseEntity.ok(out);
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            boolean deleted = fieldService.delete(id);
+            if (!deleted) return error(HttpStatus.NOT_FOUND, "田块不存在");
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("deleted", true);
+            return ResponseEntity.ok(out);
+        });
     }
 
     /** 追加田块记录（复查打卡等） */
     @PostMapping("/{id}/records")
     public ResponseEntity<?> addRecord(@PathVariable String id, @RequestBody FieldRecord record) {
-        if (fieldService.get(id) == null) return error(HttpStatus.NOT_FOUND, "田块不存在");
-        RequestValidation.date(record.date(), "记录日期");
-        RequestValidation.requiredText(record.note(), "记录内容", 8000);
-        fieldService.addRecord(id, record.date(), record.note());
-        return ResponseEntity.ok(fieldService.get(id));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            if (fieldService.get(id) == null) return error(HttpStatus.NOT_FOUND, "田块不存在");
+            RequestValidation.date(record.date(), "记录日期");
+            RequestValidation.requiredText(record.note(), "记录内容", 8000);
+            fieldService.addRecord(id, record.date(), record.note());
+            return ResponseEntity.ok(fieldService.get(id));
+        });
     }
 
     private void validate(FieldProfile field) {

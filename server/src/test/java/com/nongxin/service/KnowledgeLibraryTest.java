@@ -24,23 +24,28 @@ class KnowledgeLibraryTest {
     @Test
     void loadsVerifiedSourcesAndKeepsLocalDraftsUnverified() {
         List<KnowledgeDocument> documents = library.documents();
-        assertThat(documents).filteredOn(KnowledgeDocument::verified).hasSize(5);
+        // 已核验来源：5 篇原始 + 4 篇 2026 年官方防控/用药文件（Tier 1 采集）＝9 篇
+        // 本地草稿（kb.json）固定 17 篇；新增来源不会改变草稿数量
+        assertThat(documents).filteredOn(KnowledgeDocument::verified).hasSize(9);
         assertThat(documents).filteredOn(d -> !d.verified()).hasSize(17);
         assertThat(documents).filteredOn(KnowledgeDocument::verified)
                 .allSatisfy(d -> {
-                    assertThat(d.url()).startsWith("https://");
+                    // 政府网站部分仍是 http-only（如广西农业农村厅不支持 TLS），因此只要求是合法 http(s) 链接
+                    assertThat(d.url()).matches("https?://.+");
                     assertThat(d.institution()).isNotBlank();
                     assertThat(d.publishedAt()).isNotBlank();
                     assertThat(d.version()).isNotBlank();
                     assertThat(d.license()).isNotBlank();
-                    assertThat(d.fetchedAt()).isEqualTo("2026-09-08");
+                    // 抓取日期只校验格式（每次新增来源都会刷新，写死日期会让测试失效）
+                    assertThat(d.fetchedAt()).matches("\\d{4}-\\d{2}-\\d{2}");
                 });
         assertThat(documents).filteredOn(d -> !d.verified())
                 .allSatisfy(d -> {
                     assertThat(d.url()).isNull();
                     assertThat(d.reviewStatus()).isEqualTo("unverified");
                 });
-        assertThat(library.chunks()).hasSize(44);
+        // 片段总数：已核验 57（27 原始 + 30 新增）＋ 本地草稿 17 ＝ 74
+        assertThat(library.chunks()).hasSize(74);
         assertThat(library.chunks()).allSatisfy(chunk -> {
             assertThat(chunk.documentId()).isNotBlank();
             assertThat(chunk.text()).isNotBlank();

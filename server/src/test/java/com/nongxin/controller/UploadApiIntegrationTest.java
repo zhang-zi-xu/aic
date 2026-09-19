@@ -128,7 +128,7 @@ class UploadApiIntegrationTest {
         byte[] served = mvc.perform(get("/api/uploads/" + id))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Type", MediaType.IMAGE_JPEG_VALUE))
-                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("immutable")))
+                .andExpect(header().string("Cache-Control", "no-store"))
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(served[0] & 0xFF).isEqualTo(0xFF);
         assertThat(served[1] & 0xFF).isEqualTo(0xD8);

@@ -6,6 +6,7 @@ import com.nongxin.model.TaskStatus;
 import com.nongxin.service.FieldService;
 import com.nongxin.service.KnowledgeLibrary;
 import com.nongxin.service.TaskService;
+import com.nongxin.service.CurrentUser;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -27,11 +28,13 @@ public class TaskController implements org.springframework.boot.ApplicationRunne
     private final TaskService tasks;
     private final FieldService fields;
     private final KnowledgeLibrary knowledge;
+    private final CurrentUser currentUser;
 
-    public TaskController(TaskService tasks, FieldService fields, KnowledgeLibrary knowledge) {
+    public TaskController(TaskService tasks, FieldService fields, KnowledgeLibrary knowledge, CurrentUser currentUser) {
         this.tasks = tasks;
         this.fields = fields;
         this.knowledge = knowledge;
+        this.currentUser = currentUser;
     }
 
     /** 启动时自动合并历史遗留的重复任务（保守规则见 TaskService.mergeDuplicates）。 */
@@ -44,57 +47,69 @@ public class TaskController implements org.springframework.boot.ApplicationRunne
 
     @GetMapping
     public List<FarmTask> list() {
-        return tasks.list().stream().map(this::withEvidenceCards).toList();
+        return currentUser.withSnapshot(currentUser.capture(), () -> tasks.list().stream().map(this::withEvidenceCards).toList());
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<?> get(@PathVariable String id) {
-        FarmTask task = tasks.get(id);
-        return task == null ? notFound() : ResponseEntity.ok(withEvidenceCards(task));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            FarmTask task = tasks.get(id);
+            return task == null ? notFound() : ResponseEntity.ok(withEvidenceCards(task));
+        });
     }
 
     @GetMapping("/{id}/records")
     public ResponseEntity<?> records(@PathVariable String id) {
-        return tasks.get(id) == null ? notFound() : ResponseEntity.ok(tasks.records(id));
+        return currentUser.withSnapshot(currentUser.capture(), () ->
+                tasks.get(id) == null ? notFound() : ResponseEntity.ok(tasks.records(id)));
     }
 
     /** 登记任务：201 = 新建，200 = 该方案项已登记过（幂等，不产生重复任务）。 */
     @PostMapping
     public ResponseEntity<?> create(@RequestBody FarmTask task) {
-        String id = task.id() == null || task.id().isBlank() ? TaskService.newId() : RequestValidation.id(task.id());
-        FarmTask candidate = validate(id, task, true);
-        FarmTask existing = tasks.findByPlanItem(candidate.sourceMessageId(), candidate.planItemId());
-        FarmTask saved = tasks.create(candidate);
-        return ResponseEntity.status(existing == null ? HttpStatus.CREATED : HttpStatus.OK).body(withEvidenceCards(saved));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            String id = task.id() == null || task.id().isBlank() ? TaskService.newId() : RequestValidation.id(task.id());
+            FarmTask candidate = validate(id, task, true);
+            FarmTask existing = tasks.findByPlanItem(candidate.sourceMessageId(), candidate.planItemId());
+            FarmTask saved = tasks.create(candidate);
+            return ResponseEntity.status(existing == null ? HttpStatus.CREATED : HttpStatus.OK).body(withEvidenceCards(saved));
+        });
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable String id, @RequestBody FarmTask task) {
-        RequestValidation.matchingId(id, task.id());
-        FarmTask updated = tasks.update(id, validate(id, task, false));
-        return updated == null ? notFound() : ResponseEntity.ok(withEvidenceCards(updated));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            RequestValidation.matchingId(id, task.id());
+            FarmTask updated = tasks.update(id, validate(id, task, false));
+            return updated == null ? notFound() : ResponseEntity.ok(withEvidenceCards(updated));
+        });
     }
 
     /** 状态操作：确认安排、取消、恢复、重新打开。需要记录的推进会被拒绝。 */
     @PostMapping("/{id}/status")
     public ResponseEntity<?> changeStatus(@PathVariable String id, @RequestBody Map<String, String> body) {
-        TaskStatus target = TaskStatus.of(body == null ? null : body.get("status"));
-        FarmTask updated = tasks.changeStatus(id, target);
-        return updated == null ? notFound() : ResponseEntity.ok(withEvidenceCards(updated));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            TaskStatus target = TaskStatus.of(body == null ? null : body.get("status"));
+            FarmTask updated = tasks.changeStatus(id, target);
+            return updated == null ? notFound() : ResponseEntity.ok(withEvidenceCards(updated));
+        });
     }
 
     /** 提交执行/复查记录，并推进状态；记录与任务、田块、来源消息一起保存。 */
     @PostMapping("/{id}/records")
     public ResponseEntity<?> addRecord(@PathVariable String id, @RequestBody TaskRecord record) {
-        FarmTask task = tasks.get(id);
-        if (task == null) return notFound();
-        TaskRecord saved = validateRecord(task, record);
-        return ResponseEntity.ok(withEvidenceCards(tasks.addRecord(id, saved)));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            FarmTask task = tasks.get(id);
+            if (task == null) return notFound();
+            TaskRecord saved = validateRecord(task, record);
+            return ResponseEntity.ok(withEvidenceCards(tasks.addRecord(id, saved)));
+        });
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
-        return tasks.delete(id) ? ResponseEntity.ok(Map.of("deleted", true)) : notFound();
+        return currentUser.withSnapshot(currentUser.capture(), () ->
+                tasks.delete(id) ? ResponseEntity.ok(Map.of("deleted", true)) : notFound());
     }
 
     private ResponseEntity<?> notFound() {

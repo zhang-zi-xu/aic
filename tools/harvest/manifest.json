@@ -1,0 +1,50 @@
+[
+  {
+    "file": "01-2026年水稻重大病虫害防控技术方案_实用技术_广西壮族自治区农业农村厅.txt",
+    "id": "doc-natesc-rice-pest-2026",
+    "title": "2026年水稻重大病虫害防控技术方案",
+    "institution": "全国农技推广服务中心（广西壮族自治区农业农村厅转载）",
+    "url": "http://nynct.gxzf.gov.cn/xwdt/syjs/t27431005.shtml",
+    "publishedAt": "2026-04-02",
+    "region": "全国",
+    "crops": ["水稻"],
+    "topic": "病虫害防治",
+    "keywords": ["稻瘟病", "稻曲病", "白叶枯病", "二化螟", "稻飞虱", "绿色防控", "预防为主"]
+  },
+  {
+    "file": "02-全国农技推广中心发布2026年小麦春季重大病虫害防控技术方案.txt",
+    "id": "doc-natesc-wheat-spring-2026",
+    "title": "2026年小麦春季重大病虫害防控技术方案",
+    "institution": "全国农技推广中心（河北省农业农村厅转载）",
+    "url": "https://nync.hebei.gov.cn/html/www/zwdt/2034197796794212353.html",
+    "publishedAt": "2026-03-18",
+    "region": "全国",
+    "crops": ["小麦"],
+    "topic": "病虫害防治",
+    "keywords": ["条锈病", "赤霉病", "纹枯病", "蚜虫", "一喷三防"]
+  },
+  {
+    "file": "03-全国农技中心关于印发小麦“一喷三防”-技术指导意见的通知-武汉市农业农村局.txt",
+    "id": "doc-natesc-wheat-yipensanfang-2026",
+    "title": "小麦“一喷三防”技术指导意见",
+    "institution": "全国农技推广服务中心（武汉市农业农村局转载）",
+    "url": "https://nyncj.wuhan.gov.cn/bmfucx/njykt/202604/t20260427_2757949.html",
+    "publishedAt": "2026-04-27",
+    "region": "全国",
+    "crops": ["小麦"],
+    "topic": "水肥与施药",
+    "keywords": ["一喷三防", "赤霉病", "蚜虫", "叶面肥", "安全间隔期"]
+  },
+  {
+    "file": "04-农业农村部关于开展“精准用药提质增效”行动深入推进农药科学安全使用工作的指导意见.txt",
+    "id": "doc-moa-precise-pesticide-2026",
+    "title": "关于开展“精准用药提质增效”行动深入推进农药科学安全使用工作的指导意见",
+    "institution": "农业农村部",
+    "url": "https://www.moa.gov.cn:10443/govpublic/ZZYGLS/202603/t20260316_6482257.htm",
+    "publishedAt": "2026-02-26",
+    "region": "全国",
+    "crops": ["水稻", "小麦"],
+    "topic": "安全用药",
+    "keywords": ["精准用药", "农药减量", "安全间隔期", "登记标签", "抗性治理"]
+  }
+]

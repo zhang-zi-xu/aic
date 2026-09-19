@@ -13,11 +13,14 @@ import com.nongxin.model.ChatResponse;
 import com.nongxin.model.FieldProfile;
 import com.nongxin.model.FieldRecord;
 import com.nongxin.service.ApiKeyService;
+import com.nongxin.service.CurrentUser;
 import com.nongxin.service.KnowledgeLibrary;
+import com.nongxin.service.QuotaClient;
 import com.nongxin.service.UploadService;
 import com.nongxin.service.VisionSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -61,19 +64,21 @@ public class ChatController {
     private final KnowledgeLibrary library;
     private final UploadService uploads;
     private final VisionSupport vision;
+    private final CurrentUser currentUser;
 
     /** 字段注入：避免改动构造器签名与并行开发的其它改动冲突 */
     @org.springframework.beans.factory.annotation.Autowired
     private ApiKeyService apiKeys;
 
     public ChatController(AgentRunner runner, AgriTools agriTools, ChatStreams streams, KnowledgeLibrary library,
-                          UploadService uploads, VisionSupport vision) {
+                          UploadService uploads, VisionSupport vision, CurrentUser currentUser) {
         this.runner = runner;
         this.agriTools = agriTools;
         this.streams = streams;
         this.library = library;
         this.uploads = uploads;
         this.vision = vision;
+        this.currentUser = currentUser;
     }
 
     /** 前端用来判断当前模型能不能看图（名单 + 用户设置），避免用户自己猜。 */
@@ -90,35 +95,41 @@ public class ChatController {
 
     @PostMapping
     public ResponseEntity<?> chat(@RequestBody ChatRequest request) {
-        return chat(request, null);
+        CurrentUser.Snapshot owner = currentUser.capture();
+        return currentUser.withSnapshot(owner, () -> chat(request, null, QuotaClient.captureCurrent()));
     }
 
     @PostMapping(value = "/stream", produces = "text/event-stream")
     public SseEmitter stream(@RequestBody ChatRequest request, jakarta.servlet.http.HttpServletResponse response) {
+        // Capture before queuing or opening SSE. No data access, quota reservation or provider work on failure.
+        CurrentUser.Snapshot owner = currentUser.capture();
         response.setHeader("Cache-Control", "no-cache, no-transform");
         response.setHeader("X-Accel-Buffering", "no");
         // SseEmitter must be the raw return value: wrapping it in ResponseEntity would route it to
         // the message converters, which cannot write it ("No converter for SseEmitter").
-        return streams.open(observer -> chat(request, observer));
+        QuotaClient client = QuotaClient.captureCurrent();
+        return streams.open(observer -> currentUser.withSnapshot(owner, () -> chat(request, observer, client)));
     }
 
-    private ResponseEntity<?> chat(ChatRequest request, StreamObserver stream) {
+    private ResponseEntity<?> chat(ChatRequest request, StreamObserver stream, QuotaClient client) {
         try {
             if (request == null) {
                 return error(HttpStatus.BAD_REQUEST, "请提供对话请求");
             }
-            if (request.model() == null || request.model().isBlank()) {
+            // Determine effective configuration without obtaining a server Key or debiting quota.
+            ApiKeyService.ModelSelection selected = apiKeys.select(request.apiKey(), request.provider(), request.model());
+            if (selected.serverEndpointUnavailable()) {
+                return error(HttpStatus.SERVICE_UNAVAILABLE, ApiKeyService.SERVER_ENDPOINT_UNAVAILABLE_MESSAGE,
+                        ApiKeyService.Denial.SERVER_ENDPOINT_UNAVAILABLE.name());
+            }
+            if (selected.model() == null || selected.model().isBlank()) {
                 return error(HttpStatus.BAD_REQUEST, "请填写模型名称");
             }
-            // 服务端演示 Key 兜底 + 成本护栏（用户自带 Key 优先且不限流）
-            ApiKeyService.Resolution resolved = apiKeys.resolve(request.apiKey(), request.provider(), request.model());
-            if (!resolved.allowed()) {
-                return error(HttpStatus.TOO_MANY_REQUESTS, resolved.denyReason());
-            }
-            if (resolved.apiKey() == null || resolved.apiKey().length() < 12) {
+            if (!selected.keyAvailable()) {
                 return error(HttpStatus.BAD_REQUEST, "请填写有效的 API 密钥");
             }
-            String endpoint = resolveEndpoint(resolved.provider(), request.baseUrl());
+            // Server credentials use fixed presets only; client addresses belong exclusively to user keys.
+            String endpoint = resolveEndpoint(selected.provider(), selected.serverSide() ? null : request.baseUrl());
             List<Map<String, Object>> history = sanitizeMessages(request.messages());
 
             // 图片：只收 id，原图由服务端读盘后转发给供应商；不支持视觉的模型明确拒绝，绝不发"伪视觉请求"
@@ -133,20 +144,20 @@ public class ChatController {
                 if (images.size() != imageIds.size()) {
                     return error(HttpStatus.BAD_REQUEST, "有图片不存在或已被清理，请重新上传后再发送");
                 }
-                if (!vision.effective(request.imageInput(), resolved.model())) {
+                if (!vision.effective(request.imageInput(), selected.model())) {
                     return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
-                            "当前模型「" + resolved.model() + "」不在支持看图的名单里。请在「模型设置」里换成支持图片的模型，"
+                            "当前模型「" + selected.model() + "」不在支持看图的名单里。请在「模型设置」里换成支持图片的模型，"
                                     + "或在那里把「图片输入」设为“支持”。图片没有发送给供应商。");
                 }
             }
             // 田块近况分析：自动带上该田块最近 3 张照片（仅在明确要求时；模型不支持看图就跳过并记录日志）
             if (Boolean.TRUE.equals(request.autoFieldPhotos()) && field != null) {
-                if (vision.effective(request.imageInput(), resolved.model())) {
+                if (vision.effective(request.imageInput(), selected.model())) {
                     for (UploadService.Stored photo : uploads.latestForField(field.id(), 3)) {
                         if (images.stream().noneMatch(existing -> existing.id().equals(photo.id()))) images.add(photo);
                     }
                 } else {
-                    log.info("chat 田块近况：模型 {} 未标记支持看图，已跳过自动带图", resolved.model());
+                    log.info("chat 田块近况：模型 {} 未标记支持看图，已跳过自动带图", selected.model());
                 }
             }
             if (!images.isEmpty()) {
@@ -172,10 +183,21 @@ public class ChatController {
             context.put("field", field);
             context.put("location", location);
             context.put("forecastText", forecastText);
-            AgentContext ctx = new AgentContext("web-user", context);
+            AgentContext ctx = new AgentContext(currentUser.id(), context);
 
             String systemPrompt = buildSystemPrompt(field, locationText, !images.isEmpty());
 
+            // All deterministic local preparation has succeeded. Reserve once, immediately before the runner.
+            if (stream != null) stream.check();
+            ApiKeyService.Resolution resolved = apiKeys.resolve(request.apiKey(), request.provider(), request.model(), client);
+            if (!resolved.allowed()) {
+                HttpStatus status = resolved.denial() == ApiKeyService.Denial.QUOTA_EXHAUSTED
+                        ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
+                return error(status, resolved.denyReason(), resolved.denial().name());
+            }
+            if (resolved.apiKey() == null || resolved.apiKey().length() < 12) {
+                return error(HttpStatus.BAD_REQUEST, "请填写有效的 API 密钥");
+            }
             var config = new AgentRunner.Config(resolved.model(), endpoint, resolved.apiKey(), systemPrompt, registry, ctx, 5, null);
             AgentResult result = stream == null ? runner.run(config, history) : runner.run(config, history, stream);
 
@@ -200,36 +222,42 @@ public class ChatController {
                     boolean degraded = cardProduced ? result.degraded() : (retry.degraded() || result.degraded());
                     result = new AgentResult(reply, merged, result.rounds() + retry.rounds(), degraded);
                 } catch (java.util.concurrent.CancellationException e) { throw e;
+                } catch (CurrentUser.IdentityUnavailable e) { throw e;
                 } catch (Exception e) {
                     log.warn("强制确认轮失败: {}", e.getClass().getSimpleName());
                 }
             }
 
-            // 结论优先兜底：只回答了"卡片已提交"这类清单、正文没有判断句时，补一轮只写判断段
-            // （用户抱怨过"到最后也没说我的水稻怎么了"——卡片不能替代结论。）
-            if (lacksVerdict(result.reply()) && result.submissions().stream()
+            // 仅给卡片回执时补充说明；不以缺少诊断词为由追加判断，也不继续消耗已失败的请求。
+            if (!result.degraded() && isOnlyCardReceipt(result.reply()) && result.submissions().stream()
                     .anyMatch(s -> "submit_farm_plan".equals(s.name()) || "submit_clarify".equals(s.name()))) {
                 try {
-                    List<Map<String, Object>> verdictHistory = new ArrayList<>(history);
-                    verdictHistory.add(Map.of("role", "assistant", "content", result.reply()));
-                    verdictHistory.add(Map.of("role", "user", "content",
-                            "你上一条只说了卡片的事，没有回答我的问题。现在请**只写判断段**（不要重复卡片内容、不要再调用任何工具、不要列清单）："
-                                    + "第一句用农民听得懂的话说明「最可能是什么、凭什么这么看、不太像什么」，再补一句「看到什么就说明判断错了、要改成什么」。"
-                                    + "允许不确定，但不许用「信息不足」代替判断。总共不超过 200 字。"));
-                    var verdictConfig = new AgentRunner.Config(resolved.model(), endpoint, resolved.apiKey(), systemPrompt, registry, ctx, 1, null);
+                    List<Map<String, Object>> explanationHistory = new ArrayList<>(history);
+                    explanationHistory.add(Map.of("role", "assistant", "content", result.reply() == null ? "" : result.reply()));
+                    explanationHistory.add(Map.of("role", "user", "content",
+                            "上一条只说明卡片已生成，请补充简短解释，不重复卡片回执。只使用已提供的事实；"
+                                    + "信息不足时明确说明未知，并给出不依赖缺失信息的观察或核查步骤。"
+                                    + "不得新增诊断、用药决定、剂量或具体作业时间；不得假装资料已经检索或用户已执行。"
+                                    + "无需也不能调用工具；不要求出现诊断词，不确定就如实说明，总共不超过 200 字。"));
+                    // 禁用工具，而不只是在自然语言里要求“不调用”，避免补写又产生新卡片或新动作。
+                    var explanationConfig = new AgentRunner.Config(resolved.model(), endpoint, resolved.apiKey(),
+                            systemPrompt + "\n【正文补充模式】本轮只补充已有卡片的说明，不执行前述工具调用要求，不新增方案。",
+                            new ToolRegistry(), ctx, 1, null);
                     StreamObserver quiet = stream == null ? null : new StreamObserver() {
                         public boolean cancelled() { return stream.cancelled(); }
                         public void event(String name, Object data) { check(); if ("status".equals(name)) stream.event(name, data); }
                     };
-                    AgentResult retry = stream == null ? runner.run(verdictConfig, verdictHistory) : runner.run(verdictConfig, verdictHistory, quiet);
-                    if (!retry.degraded() && !lacksVerdict(retry.reply())) {
-                        result = new AgentResult(retry.reply().trim() + "\n\n" + result.reply(),
-                                result.submissions(), result.rounds() + retry.rounds(), result.degraded());
-                        log.info("chat 结论兜底：已补写判断段（{} 字）", retry.reply().trim().length());
+                    AgentResult retry = stream == null ? runner.run(explanationConfig, explanationHistory) : runner.run(explanationConfig, explanationHistory, quiet);
+                    String reply = result.reply();
+                    if (!retry.degraded() && !isOnlyCardReceipt(retry.reply())) {
+                        reply = retry.reply().trim() + (reply == null || reply.isBlank() ? "" : "\n\n" + reply);
+                        log.info("chat 卡片说明：已补充正文（{} 字）", retry.reply().trim().length());
                     }
+                    result = new AgentResult(reply, result.submissions(), result.rounds() + retry.rounds(), result.degraded());
                 } catch (java.util.concurrent.CancellationException e) { throw e;
+                } catch (CurrentUser.IdentityUnavailable e) { throw e;
                 } catch (Exception e) {
-                    log.warn("结论兜底轮失败: {}", e.getClass().getSimpleName());
+                    log.warn("卡片说明补充失败: {}", e.getClass().getSimpleName());
                 }
             }
 
@@ -245,6 +273,9 @@ public class ChatController {
             return ResponseEntity.ok(new ChatResponse(reply, plan, risk, clarify, sources,
                     result.rounds(), resolved.provider(), resolved.model(), result.degraded()));
         } catch (java.util.concurrent.CancellationException e) { throw e;
+        } catch (CurrentUser.IdentityUnavailable e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                    .body(Map.of("error", e.getMessage(), "code", "IDENTITY_UNAVAILABLE", "status", 503));
         } catch (AgentRunner.ProviderException e) {
             return error(e.timeout() ? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY, e.getMessage());
         } catch (IllegalArgumentException e) {
@@ -319,12 +350,18 @@ public class ChatController {
         return trimmed.length() <= 200 ? trimmed : trimmed.substring(0, 200) + "…";
     }
 
-    /** 判断句特征：出现任意一个，就认为正文给了结论（而不是只汇报卡片）。 */
-    private static final Pattern VERDICT_RE = Pattern.compile("最可能|很可能|大概率|判断|应该是|更像|倾向于|可能是|我怀疑|问题出在");
+    /** 保守识别纯回执，任何无法确认是回执的句子都保留，不用关键词判断答案专业性。 */
+    private static final Pattern CARD_RECEIPT_PART = Pattern.compile(
+            "(?:(?:确认卡|确认清单|方案卡|方案|处方单|卡片)(?:已经|已)?(?:生成|整理|提交|登记|发出|发送|准备)(?:完毕|完成|好)?了?"
+                    + "|请?(?:查看|点选|填写|提交|完成)(?:上方|下方)?的?(?:确认卡|确认清单|方案卡|方案|处方单|卡片)"
+                    + "|(?:共|一共)\\d+项(?:动作|任务)?|点一下就行)");
 
-    /** 正文是否缺少判断句。 */
-    static boolean lacksVerdict(String reply) {
-        return reply == null || reply.isBlank() || !VERDICT_RE.matcher(reply).find();
+    static boolean isOnlyCardReceipt(String reply) {
+        if (reply == null || reply.isBlank()) return true;
+        String plain = reply.replaceAll("[ \\t\\r*`#]", "");
+        if (plain.length() > 160) return false;
+        return java.util.Arrays.stream(plain.split("[，,。！？!?；;：:\\n]+"))
+                .filter(part -> !part.isBlank()).allMatch(part -> CARD_RECEIPT_PART.matcher(part).matches());
     }
 
     private boolean looksLikeOralClarify(String reply) {
@@ -339,6 +376,12 @@ public class ChatController {
         }
         String url = baseUrl.trim();
         if (!url.startsWith("https://")) throw new IllegalArgumentException("自定义 API 地址必须是公开的 HTTPS 地址");
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            if (uri.getHost() == null || uri.getHost().isBlank()) throw new IllegalArgumentException();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("自定义 API 地址格式不正确，请填写完整的 HTTPS 地址");
+        }
         if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
         if (url.endsWith("/chat/completions")) return url;
         return url + (url.endsWith("/v1") ? "" : "/v1") + "/chat/completions";
@@ -381,7 +424,9 @@ public class ChatController {
                 + "。只能描述这些照片里确实看得见的内容；照片之间有时间差时，可以对比变化，但不要假设中间发生了什么。】"));
         for (UploadService.Stored image : images) {
             byte[] data = uploads.read(image.id());
-            if (data == null) continue;
+            if (data == null || data.length == 0) {
+                throw new IllegalArgumentException("附带图片已不可读取，请重新上传后再发送。图片没有发送给供应商。");
+            }
             parts.add(Map.of("type", "image_url", "image_url",
                     Map.of("url", "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(data))));
         }
@@ -441,35 +486,31 @@ public class ChatController {
         sb.append("【当前时间】").append(currentTimeText())
                 .append("。安排农事时间、判断施药窗口、写「今天/明天/本周」时必须以此为基准：已经过去的时段（例如已经过去的今天傍晚）不得再作为执行窗口；不确定一天中的具体时段时不要假设，除非用户说明或天气数据给出。\n\n");
         sb.append("【回答结构 · 必须遵守】\n");
-        sb.append("- 第一段直接给结论或今天就能执行的事，共 1-3 段，别绕；\n");
-        sb.append("- **第一句必须先给判断**：用农民听得懂的话说清「最可能是什么、凭什么这么看、不太像什么」，例如「最可能是稻瘟病（叶瘟）：叶尖有梭形斑、边缘褐色；不太像胡麻斑，那种斑更圆、中心发白」。允许不确定（「最可能是…，现场再确认一处」），但**不许用「信息不足」代替判断**，也不许把追问当成回答主体；\n");
-        sb.append("- **判断要能被推翻**：给出判断后补一句「如果看到 X，就说明我判断错了、要改成 Y」，让用户知道该去看什么；\n");
-        sb.append("- **最多追问一轮**：同一会话里如果你已经发过 1 张确认卡，之后每一轮都必须给出判断 + 今天能做的一件事，禁止连续两轮以追问或确认卡收尾；\n");
-        sb.append("- 处方单只是补充：正文没有判断段、只给了处方单，等于没有回答用户的「到底怎么了」；\n");
-        sb.append("- 结论之后把信息分清楚：① 你提供的事实（用户说的、田块档案里的）；② 资料支持的判断（写明来源ID或标题+机构+日期，并说明适用地区/作物/生育期）；③ 仍需核实的信息（现场要看什么、去哪里核对登记）。\n");
-        sb.append("- 缺关键信息时：能给的先给，然后把追问交给 submit_clarify（结构化确认卡，带选项，最多 3 项）——不要用大段文字追问，不要整篇都是「请确认」；\n");
-        sb.append("- 追问的同时必须先给出至少一条可执行内容（关键时间窗口、判断依据或现场核查点）。禁止出现整篇只写「确认卡已经发您了，点一下就行」这类没有实质信息的回答——用户会认为你没回答他的问题。正确做法：先用 1-2 句给出结论或关键窗口，再让用户点确认卡补充；\n");
+        sb.append("- 先回应用户实际问题，共 1-3 段。一般知识问答直接解释知识与适用范围，不套用具体田块，不要求出现诊断词或强制给方案；\n");
+        sb.append("- 信息不足时明确说明未知：缺作物、症状、时段等关键事实时，可以说「目前还不能确定原因」，并给不依赖缺失信息的观察或核查步骤；不得为了先给结论而猜病名、用药决定或作业时间；\n");
+        sb.append("- 证据足够时才给有条件的判断：说明支持的事实、依据与适用边界；排除方法必须有依据，不为凑格式编造另一个诊断；\n");
+        sb.append("- 矛盾信息先核实：日期、作物、生育期、是否已经执行等相互冲突时，指出冲突，不擅自选一个当事实；无位置或天气时不得给出具体天气结论或施药窗口；\n");
+        sb.append("- 把信息分清楚：① 你提供的事实；② 资料支持的内容（来源ID或标题、机构、日期及适用条件）；③ 仍需核实的信息。没有依据的部分明确未知，不为了凑三段补造；\n");
+        sb.append("- 缺失信息通过 submit_clarify 提交确认卡，每轮只问最影响判断的 1 至 3 项，选项应允许「暂不确定」。禁止出现整篇只写「确认卡已经发您了，点一下就行」：用简短正文解释缺什么、为什么需要以及如何核查；\n");
         sb.append("- 确认卡的选项与提示不得包含已经过去的时段（例如晚上 8 点不要再问「今天傍晚来得及打药吗」），也不得与【当前时间】矛盾；\n");
-        sb.append("- 用户已经回答过的问题（包括回答「暂不确定」）不得原样重复追问。「暂不确定」是明确的未知：把它写进「仍需核实的信息」，或换一个不同角度的问题；同一会话连续追问不超过 2 轮——**如果你在历史消息里已经发出过 2 张确认卡，这一轮禁止再调用 submit_clarify**，必须先给出方案（submit_farm_plan）或明确的下一步；\n");
-        sb.append("- 追问唯一通道是 submit_clarify：只调用工具才算完成追问——如果你只在文字里写「请确认 XX」，用户那边不会出现确认卡，等于没完成回答；\n");
-        sb.append("- 追问不是推迟给方案的理由：**确认卡与处方单可以在同一轮一起提交**。如果这一轮你给出了带时间或带条件的动作，就必须同时调用 submit_farm_plan 把它提交成处方单，没定下来的字段写「待确认」——只发确认卡会让用户拿不到「加入任务」入口，等于这件事没落到日程上；\n");
-        sb.append("- 【一轮一件事 · 必须遵守】**信息没问完就不要给方案**：这一轮如果还有影响判断的关键信息没确认（用药史、症状细节、田块位置、天气等），就只做两件事——① 给出简短判断；② 用 submit_clarify **一次性把要问的都问完**（最多 3 项）。这一轮**不要**调用 submit_farm_plan，既不要给方案卡，也不要在正文里排时间表；\n");
-        sb.append("- 用户答完确认卡、信息齐了之后，**这时才调用 submit_farm_plan 提交方案**（一次只给一张卡，把该做的都放在这一张里），并说明「相较之前的判断有没有变化」；同一会话**最多追问一轮**，第二个确认卡不允许出现。\n");
-        sb.append("- 用户答完确认卡、信息齐了之后，**这时才调用 submit_farm_plan 提交方案**（一次只给一张卡，把该做的都放在这一张里），并说明「相较之前的判断有没有变化」；\n");
-        sb.append("- **正文长度预算**：默认控制在 400 字以内，判断段 3 句以内；只有用户明确要「详细讲」时才展开。宁可少说、把话留给确认卡，也不要把一屏塞满——看这些话的很多是在田里用手机的农民；\n");
+        sb.append("- 用户已经回答过的问题不得原样重复追问；「暂不确定」仍然是未知，不等于已满足条件。不按确认卡轮数强制诊断或生成方案：新出现的必要信息缺口可继续确认，确实无法补充时解释限制并建议现场核查，不循环逼选；\n");
+        sb.append("- 需要补齐影响具体行动安全性的关键信息时，本轮只提交确认卡，不提交该行动的方案，不在正文预排用药或作业时间；可给不依赖这些未知项的观察步骤。卡片支持逐题填写后统一提交，不要求用户把答案逐个发来；\n");
+        sb.append("- 已有信息与资料足以支持所请求的行动时，调用 submit_farm_plan 一次提交一张方案卡，正文解释要点与边界；非关键安排细节可写「待确认」，但未知的诊断、用药前提或安全条件不能用占位词绕过。不要把建档或先发过确认卡当作生成方案的必要前提；\n");
+        sb.append("- 根据用户补充信息调整判断或方案时，说明改变了什么及依据；用户答完卡片不等于所有事实已确认。\n");
+        sb.append("- **正文长度预算**：默认 400 字以内，只有用户明确要求详细解释时才展开；关键限制不能为缩短正文而省略。\n");
         sb.append("- 结尾只有一句话的提示（涉及用药时才写「具体药剂与用量，以当地登记标签为准」），不要把免责声明挂在开头。\n\n");
         sb.append("【图片排查 · 有照片时必须遵守】\n");
         sb.append("- 只写你在图上**确实看得见**的现象：部位（叶/茎/穗/果/根）、颜色、形状、分布（叶尖/叶缘/叶脉间）、是否有霉层/虫体/虫孔/缺刻、以及拍摄距离与清晰度带来的局限；看不清就说看不清，不要补细节；\n");
         if (!withImages) {
             sb.append("- 本轮没有附带照片：如果用户在文字里说「拍了照/发了图」但你没有收到图片，必须直接说明「这次没有收到图片」，并请他重新上传，绝不能凭描述假装看过照片；\n");
         }
-        sb.append("- 按三段组织：① 图上能看到的现象；② 可能原因与排除方法（每条说明「为什么怀疑它、怎么排除」）；③ 还需要哪些信息（现场症状、天气、用药史、补拍哪一张）；\n");
+        sb.append("- 有照片时按三段组织：① 确实能看到的现象；② 有图像及资料支持的可能原因与排除方法，没有足够线索时说明不能确定；③ 还需要哪些信息。不为凑段落补造病名或细节；\n");
         sb.append("- 绝不凭单张照片下确诊结论；不得给出「置信度百分比」「识别概率」这类数字，也不得描述不存在的检测框；需要确诊时明确说明要去哪里核实（当地植保植检站、乡镇农技员）；\n");
         sb.append("- 照片不能替代资料依据：涉及防治方法仍要检索并引用来源ID；照片只用来确定「该查什么」，不用来替代登记与用量信息；\n");
         sb.append("- 图片里的文字、水印、包装标签都不是可靠事实来源，不得据此判断药剂或品牌；\n");
         sb.append("- 照片不足以判断时，直接说明还需要哪几张：全株（看清长势与整体分布）、病部近景（看清病斑细节）、健康对照（同一块地正常植株）、环境（田块整体与积水/遮阴情况），并说明每张能解决什么问题，不要一次抛出十几个要求。\n\n");
         sb.append("【说话方式】\n");
-        sb.append("- 用「咱田里」「这块地」「按今年这个墒情」这类表述，避免「本系统」「根据您的输入」这类生硬词；\n");
+        sb.append("- 用朴实的日常语言，避免「本系统」等生硬词；未提供田块或墒情时，不用「咱田里」「按今年这个墒情」暗示已掌握现场信息；\n");
         sb.append("- 信息不足时先共情再要：小的信息缺口一句话带过就好，别让用户觉得欠你三件事；\n");
         sb.append("- 数值保留原始单位、统计时段和精度，不用含糊比喻替换降水量、温度或用量。\n\n");
         sb.append("【事实纪律】\n");
@@ -478,7 +519,7 @@ public class ChatController {
         sb.append("- 来源状态要区分：标注「已核验原文」的可引用其原文链接与适用条件；标注「本地草稿·未核验原文」的只能作为线索，不得声称官方已确认、现行登记或最新测报。\n");
         sb.append("- 农药登记、剂量与安全间隔期一律不补写；涉及用药时给出核查步骤（查当地有效登记标签、咨询植保站），并提醒以登记标签为准。\n");
         sb.append("- 具体数值（时限、间隔、次数、剂量）必须与引用来源一致；来源没写的不要自拟。例如「施药后 N 小时遇雨补喷」只能照引来源写过的时长，不得把别的作物的规则套过来（小麦赤霉病的「施药后 4 小时遇雨补治」不适用于水稻稻瘟病）；\n");
-        sb.append("- 资料的适用窗口与用户实际生育期不一致时，必须说明偏差并给补救安排（例如「来源的最佳窗口是破口前 3—5 天，您已刚破口、属于偏晚，建议尽快施药并在齐穗期补一次」），不得默默当成最佳时机；\n");
+        sb.append("- 资料的适用窗口与用户实际生育期不一致时，必须说明偏差；没有适用依据时只提供核查步骤，不自动推导补药、加量或额外次数；\n");
         sb.append("- 时间安排必须与自己的结论一致：结论是「尽快施药/立刻压住」时，时间表就不能排到几天之后；若因天气等原因必须推迟，要明确说明这是权衡（例如「叶瘟宜早打，但 9/11—9/12 有雨，权衡后落在 9/13」），不要一边说立刻、一边排到三天后；\n");
         sb.append("- 资料带适用地区/作物/生育期时，先说明「这条适用于……」，与用户田块不符就直说不适用，不得无条件套用。\n");
         sb.append("- 只能使用用户提供的田块信息与工具返回结果作为事实；绝不编造品种、生育期、测报数据或药剂剂量。\n");
@@ -496,7 +537,7 @@ public class ChatController {
         sb.append("- 涉及：7 日内农事安排、施药窗口、暴雨大风判断 → 调用 get_weather_forecast；\n");
         sb.append("- 用户上传农情数据或给数值 → 调用 submit_risk_report 完成风险判定，并在回答中引用风险等级；\n");
         sb.append("- 用户要求「方案/计划/处方/怎么办/安排」且信息足够 → 先取依据，再调用 submit_farm_plan 提交结构化处方单；\n");
-        sb.append("- 只要你的回答里已经出现带时间、条件或顺序的农事动作清单，就必须调用 submit_farm_plan 把它提交成处方单——**这是用户「加入任务」的唯一入口**。禁止只把清单写在正文里，也禁止反问「要不要我排成处方单」，直接提交，由用户在卡片上决定加不加；信息没齐同样要提交（缺的字段写「待确认」），可以与 submit_clarify 在同一轮一起调用；\n");
+        sb.append("- 符合前述信息与证据条件的农事方案须通过 submit_farm_plan 展示，这是用户「加入任务」的唯一入口；不代表已执行。一般知识解释与信息不足时的观察提示不因此强制生成方案；\n");
         sb.append("- 信息不足影响判断 → 回答给出能做的部分后，调用 submit_clarify 提交确认清单；\n");
         sb.append("- 常识性、确定性知识可直接回答，不要滥用工具。\n\n");
         sb.append("【专业红线】\n");
@@ -516,8 +557,14 @@ public class ChatController {
     }
 
     private ResponseEntity<Map<String, Object>> error(HttpStatus status, String message) {
+        return error(status, message, null);
+    }
+
+    private ResponseEntity<Map<String, Object>> error(HttpStatus status, String message, String code) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("error", message);
+        body.put("status", status.value());
+        if (code != null) body.put("code", code);
         return ResponseEntity.status(status).body(body);
     }
 }

@@ -1,10 +1,15 @@
 package com.nongxin.controller;
 
+import com.nongxin.service.CurrentUser;
+import com.nongxin.service.ConversationService;
+import com.nongxin.service.UploadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -15,6 +20,49 @@ import java.util.Map;
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(UploadService.ArchiveChanged.class)
+    public ResponseEntity<?> uploadArchiveChanged(UploadService.ArchiveChanged exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "UPLOAD_ARCHIVE_CHANGED", "error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(UploadService.ArchiveUnavailable.class)
+    public ResponseEntity<?> uploadArchiveUnavailable(UploadService.ArchiveUnavailable exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "UPLOAD_ARCHIVE_UNAVAILABLE", "error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ConversationService.SaveUnavailable.class)
+    public ResponseEntity<?> conversationSaveUnavailable(ConversationService.SaveUnavailable exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "CONVERSATION_SAVE_UNAVAILABLE", "error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(UploadService.DeleteUnavailable.class)
+    public ResponseEntity<?> uploadDeleteUnavailable(UploadService.DeleteUnavailable exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "UPLOAD_DELETE_UNAVAILABLE", "error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(UploadService.SaveUnavailable.class)
+    public ResponseEntity<?> uploadSaveUnavailable(UploadService.SaveUnavailable exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("code", "UPLOAD_SAVE_UNAVAILABLE", "error", exception.getMessage()));
+    }
+
+    /** 身份解析暂不可用，不等同于未登录；此处尚未接入登录挑战/重认证流程。 */
+    @ExceptionHandler(CurrentUser.IdentityUnavailable.class)
+    public ResponseEntity<?> identityUnavailable(CurrentUser.IdentityUnavailable exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(CacheControl.noStore())
+                .contentType(MediaType.APPLICATION_JSON) // Also readable before SSE opens with Accept: text/event-stream.
+                .body(Map.of("code", "IDENTITY_UNAVAILABLE", "error", exception.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<?> invalid(IllegalArgumentException exception) {

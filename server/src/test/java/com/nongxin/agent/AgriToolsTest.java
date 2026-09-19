@@ -122,9 +122,17 @@ class AgriToolsTest {
         String result = registry.execute("submit_clarify",
                 Map.of("intro", "补充两点", "items", List.of(Map.of("question", "田里有病斑吗"))), new AgentContext("test", Map.of()));
 
-        assertThat(result).contains("已登记确认清单", "先用 1-2 句给出用户马上能用的结论或判断")
+        assertThat(result).contains("已登记确认清单", "信息不足时明确说明未知", "核查步骤", "暂不确定")
                 .contains("这一轮不要提交处方单")
-                .doesNotContain("告知用户信息已记录");
+                .doesNotContain("告知用户信息已记录", "结论或判断");
+    }
+
+    @Test
+    void toolDescriptionsDoNotAllowUnknownSafetyPrerequisitesToBecomeAPlan() {
+        AgentContext ctx = new AgentContext("test", Map.of());
+        String definitions = registry.collect(ctx).toString();
+        assertThat(definitions).contains("影响行动安全性的关键信息", "信息不足时明确说明未知", "非关键安排细节", "不代表用户已确认或执行")
+                .doesNotContain("没有检索到资料时不要编造依据，把该动作的用量写为");
     }
 
     @Test

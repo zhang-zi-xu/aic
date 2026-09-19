@@ -5,23 +5,60 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nongxin.model.Conversation;
 import com.nongxin.model.SavedChatMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 @Service
 public class ConversationService {
+    private static final Logger log = LoggerFactory.getLogger(ConversationService.class);
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final CurrentUser currentUser;
+    private final TransactionTemplate saveTransaction;
 
     public ConversationService(JdbcTemplate jdbc, ObjectMapper json, CurrentUser currentUser) {
         this.jdbc = jdbc;
         this.json = json;
         this.currentUser = currentUser;
+        var manager = new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource()));
+        manager.setRollbackOnCommitFailure(true);
+        saveTransaction = new TransactionTemplate(manager);
+    }
+
+    /** Commit may be uncertain: keep the user's draft and check saved history before retrying. */
+    public static final class SaveUnavailable extends RuntimeException {
+        public SaveUnavailable() {
+            super("对话保存暂时无法确认，请保留当前内容，刷新记录核对后再重试");
+        }
+    }
+
+    /** The HTTP save path confirms live image references and writes the conversation on one bound connection. */
+    public Conversation inSaveTransaction(Supplier<Conversation> operation) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.hasResource(jdbc.getDataSource())) throw new SaveUnavailable();
+        try {
+            return saveTransaction.execute(status -> {
+                Conversation saved = operation.get();
+                if (saved == null) throw new SaveUnavailable();
+                return saved;
+            });
+        } catch (DataAccessException | TransactionException failure) {
+            log.warn("[conversation] 保存结果未确认（{}），需核对已保存记录", failure.getClass().getSimpleName());
+            throw new SaveUnavailable();
+        }
     }
 
     /** 只列当前用户自己的对话（归属过滤在 SQL 里做，不靠前端）。 */

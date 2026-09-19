@@ -1,6 +1,8 @@
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: 8080
+  # 限额按实际连接来源计数，不允许环境自动启用转发头重写；可信代理支持需独立配置与验收。
+  forward-headers-strategy: none
   compression:
     enabled: true
 
@@ -18,10 +20,8 @@ spring:
   datasource:
     url: jdbc:sqlite:./data/nongxin.db
     driver-class-name: org.sqlite.JDBC
-  sql:
-    init:
-      mode: always
-      schema-locations: classpath:schema.sql
+  # 数据库由 DatabaseInitializationConfiguration 统一初始化：空库建表，旧库先备份迁移。
+  # 不再通过 Boot 的通用 SQL 初始化器直接向所有数据库执行 schema.sql。
   jackson:
     default-property-inclusion: non_null
 
@@ -69,6 +69,8 @@ nongxin:
   # 留空则不启用兜底，行为与"用户自带 Key"完全一致
   chat:
     default-api-key: ${NONGXIN_CHAT_KEY:}
+    # 演示 Key 仅支持固定预设 deepseek/openai/siliconflow；custom 安全拒绝，不能借用客户端地址。
+    # 用户自带 Key 的 custom 接口不受此限制；关闭 usage 限额也不会放开服务端 custom。
     default-provider: ${NONGXIN_CHAT_PROVIDER:deepseek}
     default-model: ${NONGXIN_CHAT_MODEL:deepseek-chat}
   # 成本护栏：只对"使用服务端 Key"的请求计数，用户自带 Key 不受限

@@ -48,6 +48,29 @@ test('stream EOF and error events never count as completed answers', async () =>
   } finally { globalThis.fetch = original; }
 });
 
+for (const [status, code, message] of [
+  [429, 'QUOTA_EXHAUSTED', '今日演示额度已用完，请使用自己的 API Key。'],
+  [503, 'QUOTA_UNAVAILABLE', '演示额度暂时无法核验，请稍后重试。'],
+] as const) {
+  for (const transport of ['http', 'sse'] as const) {
+    test(`${transport} quota error ${status} preserves its message without completion or automatic retry`, async () => {
+      const original = fetch; let calls = 0; const events: string[] = [];
+      const payload = { error: message, status, code };
+      globalThis.fetch = async () => {
+        calls++;
+        return transport === 'http' ? json(payload, status)
+          : new Response(event('error', payload), { headers: { 'Content-Type': 'text/event-stream' } });
+      };
+      try {
+        await assert.rejects(() => streamChat({}, new AbortController().signal, e => events.push(e.event)),
+          (error: unknown) => error instanceof Error && error.message === message);
+        assert.equal(calls, 1);
+        assert.deepEqual(events, []);
+      } finally { globalThis.fetch = original; }
+    });
+  }
+}
+
 type Request = { messages: Array<{ role: string; content: string }>; field: FieldProfile | null; weather: { location: string } | null };
 async function fixture(initial: Conversation[] = [], responder: (body: Request, init: RequestInit, call: number) => Response | Promise<Response> = () => complete('测试完整答案')) {
   const original = fetch; const rows = new Map(initial.map(c => [c.id, structuredClone(c)])); const requests: Request[] = [];

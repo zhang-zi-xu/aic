@@ -2,34 +2,40 @@ package com.nongxin.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.DependsOn;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.sqlite.SQLiteConfig;
 
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.ResolverStyle;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * 数据库结构版本化迁移。
  *
  * <p>约定：
  * <ul>
- *   <li>{@code schema.sql} 负责"新库直接建到 v1 基线结构"（CREATE TABLE IF NOT EXISTS，对已有库无副作用）；</li>
+ *   <li>应用初始化入口先区分空库与已有库，空库才直接运行目标结构 {@code schema.sql}；</li>
  *   <li>本服务负责把老库按版本逐步升到目标版本，<b>升级前先备份数据库文件</b>到 {@code data/backup/}；</li>
- *   <li>每一步都必须可重复执行（列存在就跳过、表存在就跳过），因此中断后重启不会卡住也不会重复加列。</li>
+ *   <li>旧库备份和版本迁移后才补建配套表；已有目标版本先核对结构，不靠重复跑脚本掩盖坏版本。</li>
  * </ul>
  *
  * <p>为什么不用清库解决：用户的田块、任务、对话是真实数据，字段变化只能靠迁移。
  */
-@Component
-@DependsOn("dataSourceScriptDatabaseInitializer")
-public class SchemaMigrationService implements InitializingBean {
+public class SchemaMigrationService {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaMigrationService.class);
 
@@ -49,15 +55,18 @@ public class SchemaMigrationService implements InitializingBean {
     /** 本机所有者：还没有登录体系之前，所有数据都归它，将来接入登录后由登录用户取代。 */
     public static final String LOCAL_OWNER_ID = "local-owner";
 
-    private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+    private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSSSSS");
+    private static final DateTimeFormatter SNAPSHOT_TIME = DateTimeFormatter.ofPattern("uuuuMMdd-HHmmss")
+            .withResolverStyle(ResolverStyle.STRICT);
+    // Accept only the historical seconds format or the current nanoseconds + UUID format.
+    private static final Pattern SNAPSHOT_NAME = Pattern.compile("^startup-v([1-9][0-9]*)-([0-9]{8}-[0-9]{6})"
+            + "(?:-([0-9]{9})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\\.db$");
 
     private final JdbcTemplate jdbc;
     private final String jdbcUrl;
     private final String configuredBackupDir;
 
-    public SchemaMigrationService(JdbcTemplate jdbc,
-                                  @Value("${spring.datasource.url:}") String jdbcUrl,
-                                  @Value("${nongxin.backup-dir:}") String configuredBackupDir) {
+    public SchemaMigrationService(JdbcTemplate jdbc, String jdbcUrl, String configuredBackupDir) {
         this.jdbc = jdbc;
         this.jdbcUrl = jdbcUrl;
         this.configuredBackupDir = configuredBackupDir;
@@ -70,7 +79,7 @@ public class SchemaMigrationService implements InitializingBean {
     /** 启动快照保留份数。 */
     private static final int SNAPSHOT_KEEP = 10;
 
-    /** 当前结构版本（迁移完成后即为 {@link #TARGET_VERSION}）。 */
+    /** 当前结构版本（迁移完成后即为 {@link #LATEST_VERSION}）。 */
     public int version() { return version; }
 
     /** 最近一次迁移前的备份文件路径；未产生备份时为空串。 */
@@ -79,57 +88,150 @@ public class SchemaMigrationService implements InitializingBean {
     /** 最近一次启动快照路径；库里没有用户数据时为空串。 */
     public String lastSnapshot() { return lastSnapshot; }
 
-    @Override
+    /** Backup failure must stop this service before its first schema/data write. */
+    public static final class MigrationBackupUnavailable extends IllegalStateException {
+        private MigrationBackupUnavailable() {
+            super("数据库升级前备份未获确认，已停止本次迁移，请检查备份目录与数据库状态后重试");
+        }
+    }
+
+    /** Application bootstrap; called once by the sole Boot database initializer, before application JDBC users. */
+    public void initializeApplicationDatabase() {
+        requireIndependentInitialization();
+        boolean existed = hasUserTables();
+        int initialVersion = tableExists("schema_version") ? currentVersion() : 0;
+        if (initialVersion > LATEST_VERSION) {
+            throw new IllegalStateException("数据库版本高于当前程序支持范围，已停止启动，请使用匹配版本的程序");
+        }
+        if (!existed) {
+            applyTargetSchema();
+            version = currentVersion();
+        } else {
+            if (initialVersion == LATEST_VERSION) requireTargetSchema();
+            migrate(false, true); // Backup first, then one transaction through complete target schema validation.
+        }
+        requireTargetSchema();
+        snapshotOnStartup();
+    }
+
+    /** Standalone migration API retained for focused legacy migration tests; not a Spring lifecycle callback. */
     public void afterPropertiesSet() {
-        ensureVersionTable();
+        requireIndependentInitialization();
+        migrate(true, false);
+    }
+
+    private void migrate(boolean takeSnapshot, boolean completeApplicationSchema) {
+        version = -1;
+        lastBackup = "";
+        lastSnapshot = "";
         boolean hasTaskTable = tableExists("farm_tasks");
-        // 启动时就已存在表 → 这是"老库"，升级前值得先备份；全新库不需要
-        boolean existed = hasTaskTable;
-        int current = currentVersion();
+        // Do not mistake a fields-only/partially initialized legacy database for an empty new one.
+        boolean existed = hasUserTables();
+        int current = tableExists("schema_version") ? currentVersion() : 0;
         if (current <= 0) current = hasTaskTable ? BASELINE_VERSION : 0;
 
         if (current >= LATEST_VERSION) {
             version = current;
             log.info("[schema] 数据库结构版本 {}，无需迁移", current);
-            snapshotOnStartup();
+            if (takeSnapshot) snapshotOnStartup();
             return;
         }
+        // Exactly once, before even creating schema_version. Failure throws instead of returning an empty path.
+        if (existed) lastBackup = backupDatabase(current);
+        int fromVersion = current;
+        try {
+            writeTransaction().executeWithoutResult(status -> {
+                applyMigrations(fromVersion);
+                if (completeApplicationSchema) applyTargetSchema(); // Joins this transaction on the same connection.
+            });
+        } catch (RuntimeException failure) {
+            log.error("[schema] 升级结果未确认，停止启动并保留迁移前备份（{}）：{}",
+                    failure.getClass().getSimpleName(), lastBackup);
+            throw failure; // Commit may be uncertain; never automatically overwrite the source with the backup.
+        }
+        version = LATEST_VERSION; // Publish completion only after the outermost commit has returned.
+        log.info("[schema] 结构版本 {} 已提交；迁移前备份：{}", version,
+                lastBackup.isBlank() ? "（新库，无需备份）" : lastBackup);
+        if (takeSnapshot) snapshotOnStartup();
+    }
+
+    private void applyMigrations(int current) {
+        ensureVersionTable();
         if (current < TARGET_VERSION) {
-            if (existed) lastBackup = backupDatabase(current);
             applyV2();
             record(TARGET_VERSION, "任务状态机、执行/复查记录、方案项幂等登记");
-            log.info("[schema] 结构已从 v{} 升级到 v{}", current, TARGET_VERSION);
             current = TARGET_VERSION;
         }
         if (current < UPLOAD_VERSION) {
-            // 一次启动里只备份一次：已有备份就复用，避免连升两级时重复拷贝
-            if (existed && lastBackup.isBlank()) lastBackup = backupDatabase(current);
             applyV3();
             record(UPLOAD_VERSION, "图片附件表（uploads）");
-            log.info("[schema] 结构已从 v{} 升级到 v{}", current, UPLOAD_VERSION);
             current = UPLOAD_VERSION;
         }
         if (current < ARCHIVE_VERSION) {
-            if (existed && lastBackup.isBlank()) lastBackup = backupDatabase(current);
             applyV4();
             record(ARCHIVE_VERSION, "图片归档到田块（field_id / observed_at / note / task_id）");
-            log.info("[schema] 结构已从 v{} 升级到 v{}", current, ARCHIVE_VERSION);
             current = ARCHIVE_VERSION;
         }
         if (current < OWNER_VERSION) {
-            if (existed && lastBackup.isBlank()) lastBackup = backupDatabase(current);
             applyV5();
             record(OWNER_VERSION, "数据归属（users 表 + 田块/任务/对话/图片的 user_id）");
-            log.info("[schema] 结构已从 v{} 升级到 v{}", current, OWNER_VERSION);
         }
-        version = LATEST_VERSION;
-        log.info("[schema] 结构版本 {}；迁移前备份：{}", version,
-                lastBackup.isBlank() ? "（新库，无需备份）" : lastBackup);
-        snapshotOnStartup();
+    }
+
+    private void requireIndependentInitialization() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.hasResource(Objects.requireNonNull(jdbc.getDataSource()))) {
+            throw new IllegalStateException("数据库初始化不能加入未完成的外层事务或绑定连接，已停止启动");
+        }
+    }
+
+    private TransactionTemplate writeTransaction() {
+        var manager = new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource()));
+        manager.setRollbackOnCommitFailure(true);
+        return new TransactionTemplate(manager);
+    }
+
+    private boolean hasUserTables() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                + " AND name NOT GLOB 'sqlite_*'", Integer.class) > 0;
+    }
+
+    private void applyTargetSchema() {
+        var source = Objects.requireNonNull(jdbc.getDataSource());
+        writeTransaction().executeWithoutResult(status -> {
+            var script = new ResourceDatabasePopulator(new ClassPathResource("schema.sql"));
+            script.setSqlScriptEncoding("UTF-8");
+            script.execute(source);
+            requireTargetSchema(); // New schema/marker is rolled back together if initialization is incomplete.
+        });
+    }
+
+    /** Structural gate, not a data repair or a complete integrity/constraint audit. Only schema metadata is read. */
+    private void requireTargetSchema() {
+        var required = Map.ofEntries(
+                Map.entry("fields", "id name crop variety sow_date area_mu notes created_at user_id"),
+                Map.entry("field_records", "id field_id record_date note"),
+                Map.entry("farm_tasks", "id title task_date field_id field_name condition_text method review note status time_window materials risk evidence plan_item_id source_message_id created_at updated_at confirmed_at executed_at completed_at user_id"),
+                Map.entry("task_records", "id task_id field_id kind record_date note outcome source_message_id created_at"),
+                Map.entry("conversations", "id title field_id messages_json created_at user_id"),
+                Map.entry("users", "id display_name phone phone_verified wechat_open_id status created_at last_login_at"),
+                Map.entry("uploads", "id mime ext bytes width height sha256 created_at referenced_at field_id observed_at note task_id user_id"),
+                Map.entry("kb_vectors", "chunk_id model dim vector updated_at"),
+                Map.entry("api_usage", "day scope scope_key count updated_at"),
+                Map.entry("answer_cache", "cache_key reply plan_json risk_json clarify_json cached_at hit_count"),
+                Map.entry("schema_version", "version applied_at note"));
+        for (var entry : required.entrySet()) {
+            var columns = jdbc.queryForList("SELECT name FROM pragma_table_info(?)", String.class, entry.getKey());
+            if (!columns.containsAll(List.of(entry.getValue().split(" ")))) {
+                throw new IllegalStateException("数据库版本与结构不一致，已停止启动，请核对备份和迁移记录；不会自动重写版本号");
+            }
+        }
+        if (currentVersion() != LATEST_VERSION) throw new IllegalStateException("数据库版本未确认，已停止启动");
     }
 
     /**
-     * 启动快照：库里有用户数据时，每次启动先留一份，只保留最近 {@link #SNAPSHOT_KEEP} 份。
+     * 启动快照：库里有用户数据时先留一份，再对确认属于支持格式的快照保留 {@link #SNAPSHOT_KEEP} 份。
+     * 本次快照固定保留，其余按文件名中的时间排序；未知文件不计数、不自动删除。
      * 用途：误删、误操作、脚本写坏数据时，至少能回到"最近一次启动前"的状态。
      */
     private void snapshotOnStartup() {
@@ -139,25 +241,74 @@ public class SchemaMigrationService implements InitializingBean {
         try {
             Path dir = backupDir(source);
             Files.createDirectories(dir);
-            Path target = dir.resolve("startup-v" + Math.max(version, 1) + "-" + LocalDateTime.now().format(STAMP) + ".db");
+            Path target = snapshotTarget(dir, "startup-v" + Math.max(version, 1));
             if (!copyDatabase(target)) return;
-            pruneSnapshots(dir);
+            pruneSnapshots(dir, target);
             lastSnapshot = target.toAbsolutePath().toString();
-            log.info("[schema] 启动快照：{}（保留最近 {} 份）", lastSnapshot, SNAPSHOT_KEEP);
+            log.info("[schema] 启动快照：{}（本次保留，已识别快照的保留目标 {} 份）", lastSnapshot, SNAPSHOT_KEEP);
         } catch (Exception e) {
             log.warn("[schema] 启动快照失败（不影响启动）：{}", e.getMessage());
         }
     }
 
-    private void pruneSnapshots(Path dir) {
+    private record SnapshotCandidate(Path path, LocalDateTime time) {}
+
+    private void pruneSnapshots(Path dir, Path current) {
+        // Do not traverse a redirected directory. An uncertain candidate is kept, never counted as expendable.
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return;
+        Path source = databaseFile();
         try (var files = Files.list(dir)) {
-            List<Path> snapshots = files
-                    .filter(path -> path.getFileName().toString().startsWith("startup-"))
-                    .sorted()
+            List<SnapshotCandidate> snapshots = files
+                    .map(path -> snapshotCandidate(path, source, current))
+                    .filter(Objects::nonNull)
+                    .sorted(Comparator.comparing(SnapshotCandidate::time)
+                            .thenComparing(candidate -> candidate.path().getFileName().toString()))
                     .toList();
-            for (int i = 0; i < snapshots.size() - SNAPSHOT_KEEP; i++) Files.deleteIfExists(snapshots.get(i));
+            // The current snapshot is excluded above and occupies one retained slot even if the clock went back.
+            for (int i = 0; i < snapshots.size() - (SNAPSHOT_KEEP - 1); i++) {
+                var candidate = snapshots.get(i);
+                if (!candidate.equals(snapshotCandidate(candidate.path(), source, current))) continue;
+                Files.deleteIfExists(candidate.path());
+            }
         } catch (Exception e) {
-            log.warn("[schema] 清理旧快照失败：{}", e.getMessage());
+            log.warn("[schema] 清理旧快照未完成，停止后续删除（{}）", e.getClass().getSimpleName());
+        }
+    }
+
+    /** Filename + read-only SQLite checks are a conservative recognition gate, not proof against external tampering. */
+    private SnapshotCandidate snapshotCandidate(Path path, Path source, Path current) {
+        try {
+            var match = SNAPSHOT_NAME.matcher(path.getFileName().toString());
+            if (!match.matches()) return null;
+            int recordedVersion = Integer.parseInt(match.group(1));
+            if (recordedVersion > LATEST_VERSION) return null;
+            LocalDateTime time = LocalDateTime.parse(match.group(2), SNAPSHOT_TIME);
+            if (match.group(3) != null) time = time.withNano(Integer.parseInt(match.group(3)));
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) == 0) return null;
+            if (Files.isSameFile(path, current) || source == null || Files.isSameFile(path, source)) return null;
+            // A sidecar may contain uncheckpointed data or indicate an active database; never prune it.
+            for (String suffix : List.of("-wal", "-shm", "-journal")) {
+                if (!Files.notExists(Path.of(path + suffix), LinkOption.NOFOLLOW_LINKS)) return null;
+            }
+            var config = new SQLiteConfig();
+            config.setReadOnly(true);
+            config.setBusyTimeout(100);
+            try (var connection = config.createConnection("jdbc:sqlite:" + path.toAbsolutePath());
+                 var sql = connection.createStatement()) {
+                try (var check = sql.executeQuery("PRAGMA quick_check")) {
+                    if (!check.next() || !"ok".equals(check.getString(1)) || check.next()) return null;
+                }
+                try (var versionRows = sql.executeQuery("SELECT MAX(version) FROM schema_version")) {
+                    if (!versionRows.next() || versionRows.getInt(1) != recordedVersion) return null;
+                }
+                try (var tables = sql.executeQuery("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                        + " AND name IN ('fields','farm_tasks','conversations')")) {
+                    if (!tables.next() || tables.getInt(1) != 3) return null;
+                }
+            }
+            return new SnapshotCandidate(path, time);
+        } catch (Exception unknown) {
+            return null; // Invalid dates/content, missing entries, unsupported versions and access failures are retained.
         }
     }
 
@@ -190,38 +341,46 @@ public class SchemaMigrationService implements InitializingBean {
 
     // ---- 迁移前备份 ----
 
-    /** 用 VACUUM INTO 做一致性快照；不支持时退回文件复制。 */
+    /** 旧库必须先取得可打开的一致性快照；失败不再放行迁移或复制正在使用的主库文件。 */
     private String backupDatabase(int fromVersion) {
-        Path source = databaseFile();
-        if (source == null || !Files.exists(source)) return "";
         try {
+            Path source = databaseFile();
+            if (source == null || !Files.isRegularFile(source)) throw new MigrationBackupUnavailable();
             Path dir = backupDir(source);
             Files.createDirectories(dir);
-            Path target = dir.resolve("nongxin-v" + fromVersion + "-" + LocalDateTime.now().format(STAMP) + ".db");
-            return copyDatabase(target) ? target.toAbsolutePath().toString() : "";
+            Path target = snapshotTarget(dir, "nongxin-v" + fromVersion);
+            if (!copyDatabase(target)) throw new MigrationBackupUnavailable();
+            return target.toAbsolutePath().toString();
         } catch (Exception e) {
-            log.error("[schema] 迁移前备份失败：{}", e.getMessage());
-            return "";
+            log.error("[schema] 迁移前备份未确认，停止本次迁移（{}）", e.getClass().getSimpleName());
+            throw new MigrationBackupUnavailable();
         }
     }
 
-    /** 一致性快照：优先 VACUUM INTO（不依赖进程外的文件锁），失败再退回文件复制。 */
+    private Path snapshotTarget(Path directory, String prefix) {
+        // Multiple starts in one second must never overwrite an earlier recovery point.
+        return directory.resolve(prefix + "-" + LocalDateTime.now().format(STAMP) + "-" + UUID.randomUUID() + ".db");
+    }
+
+    /** 一致性快照：失败关闭。普通文件复制可能遗漏 WAL 中的已提交内容，不能当作安全后备。 */
     private boolean copyDatabase(Path target) {
         Path source = databaseFile();
         if (source == null || !Files.exists(source)) return false;
         String literal = target.toAbsolutePath().toString().replace('\\', '/').replace("'", "''");
         try {
             jdbc.execute("VACUUM INTO '" + literal + "'");
-            return true;
-        } catch (Exception vacuumFailed) {
-            log.warn("[schema] VACUUM INTO 备份失败（{}），改用文件复制", vacuumFailed.getMessage());
-            try {
-                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
-                return true;
-            } catch (Exception copyFailed) {
-                log.error("[schema] 备份失败：{}", copyFailed.getMessage());
-                return false;
+            if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || Files.size(target) == 0) return false;
+            // Read-only verification must not create a new empty database when an expected output is missing.
+            var config = new SQLiteConfig();
+            config.setReadOnly(true);
+            try (var connection = config.createConnection("jdbc:sqlite:" + target.toAbsolutePath());
+                 var statement = connection.createStatement();
+                 var result = statement.executeQuery("PRAGMA quick_check")) {
+                return result.next() && "ok".equals(result.getString(1)) && !result.next();
             }
+        } catch (Exception failure) {
+            log.warn("[schema] 一致性备份未确认，不使用主库文件复制后备（{}）", failure.getClass().getSimpleName());
+            return false;
         }
     }
 
@@ -273,7 +432,7 @@ public class SchemaMigrationService implements InitializingBean {
         if (columnExists("farm_tasks", "done")) {
             jdbc.update("UPDATE farm_tasks SET status = CASE WHEN done = 1 THEN 'completed' ELSE 'pending' END");
             jdbc.execute("ALTER TABLE farm_tasks DROP COLUMN done");
-            log.info("[schema] 已把 farm_tasks.done 并入 status（completed={}）",
+            log.info("[schema] 事务内合并 farm_tasks.done 到 status，待提交（completed={}）",
                     jdbc.queryForObject("SELECT COUNT(*) FROM farm_tasks WHERE status='completed'", Integer.class));
         }
 
@@ -349,7 +508,7 @@ public class SchemaMigrationService implements InitializingBean {
     private void addColumn(String table, String column, String definition) {
         if (columnExists(table, column)) return;
         jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
-        log.info("[schema] {}.{} 已补齐", table, column);
+        log.info("[schema] 事务内补齐 {}.{}，待提交", table, column);
     }
 
     private boolean columnExists(String table, String column) {

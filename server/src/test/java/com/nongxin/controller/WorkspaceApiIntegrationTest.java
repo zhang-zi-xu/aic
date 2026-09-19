@@ -70,8 +70,11 @@ class WorkspaceApiIntegrationTest {
                 .andExpect(jsonPath("$[0].url").isString())
                 .andExpect(jsonPath("$[0].publishedAt").isString())
                 .andExpect(jsonPath("$[0].crops[0]").isString())
-                .andExpect(jsonPath("$[5].reviewStatus").value("unverified"))
-                .andExpect(jsonPath("$[5].url").doesNotExist());
+                // 已核验来源排在前（带 url/publishedAt），本地草稿在末尾且不带链接；
+                // 这里按内容判断而不是按固定下标，避免新增来源后测试失效
+                .andExpect(jsonPath("$[?(@.reviewStatus=='unverified')]").isNotEmpty())
+                .andExpect(jsonPath("$[?(@.reviewStatus=='verified')]").isNotEmpty())
+                .andExpect(jsonPath("$[?(@.reviewStatus=='unverified')].url").doesNotExist());
         for (String path : List.of("fields", "tasks", "conversations")) {
             mvc.perform(get("/api/" + path)).andExpect(status().isOk()).andExpect(content().json("[]"));
         }

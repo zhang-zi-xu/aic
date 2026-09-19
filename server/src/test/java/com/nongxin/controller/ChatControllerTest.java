@@ -13,6 +13,8 @@ import com.nongxin.model.KnowledgeDocument;
 import com.nongxin.service.ApiKeyService;
 import com.nongxin.service.KnowledgeLibrary;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
@@ -36,7 +38,7 @@ class ChatControllerTest {
     private final AgriTools tools = mock(AgriTools.class);
     private final KnowledgeLibrary library = mock(KnowledgeLibrary.class);
     private final ChatController controller = withPassthroughKeys(new ChatController(runner, tools, mock(ChatStreams.class), library,
-            mock(com.nongxin.service.UploadService.class), new com.nongxin.service.VisionSupport()));
+            mock(com.nongxin.service.UploadService.class), new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser()));
 
     /**
      * ChatController 的演示 Key 兜底走字段注入（并行开发时避免改构造器签名），
@@ -46,12 +48,17 @@ class ChatControllerTest {
     private static ChatController withPassthroughKeys(ChatController controller) {
         org.springframework.test.util.ReflectionTestUtils.setField(controller, "apiKeys", new ApiKeyService() {
             @Override
-            public Resolution resolve(String apiKey, String provider, String model) {
+            public ModelSelection select(String apiKey, String provider, String model) {
+                return new ModelSelection(provider, model, apiKey != null && apiKey.trim().length() >= 12, false);
+            }
+
+            @Override
+            public Resolution resolve(String apiKey, String provider, String model, com.nongxin.service.QuotaClient client) {
                 return new Resolution(apiKey, false, null, provider, model);
             }
 
             @Override
-            public Map<String, Object> status() {
+            public Map<String, Object> status(com.nongxin.service.QuotaClient client) {
                 return Map.of("serverKeyConfigured", false);
             }
         });
@@ -204,7 +211,7 @@ class ChatControllerTest {
         when(uploads.find(any())).thenReturn(List.of(new com.nongxin.service.UploadService.Stored(
                 "img-1", "image/jpeg", "jpg", 1024, 800, 600, "abc", "2026-09-11T09:00:00", null, null, "2026-09-11", "", null)));
         ChatController strict = withPassthroughKeys(new ChatController(runner, tools, mock(ChatStreams.class), library,
-                uploads, new com.nongxin.service.VisionSupport()));
+                uploads, new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser()));
 
         var response = strict.chat(new ChatRequest("openai", "text-only-model", null, "test-key-no-provider-call",
                 List.of(new ChatMsg("user", "看看这张叶子")), null, null, null, null, List.of("img-1"), null, null));
@@ -224,7 +231,7 @@ class ChatControllerTest {
                 "img-1", "image/jpeg", "jpg", 1024, 800, 600, "abc", "2026-09-11T09:00:00", null, null, "2026-09-11", "", null)));
         when(uploads.read("img-1")).thenReturn(new byte[] {1, 2, 3});
         ChatController withVision = withPassthroughKeys(new ChatController(runner, tools, mock(ChatStreams.class), library,
-                uploads, new com.nongxin.service.VisionSupport()));
+                uploads, new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser()));
 
         withVision.chat(new ChatRequest("openai", "gpt-4o-mini", null, "test-key-no-provider-call",
                 List.of(new ChatMsg("user", "看看这张叶子")), null, null, null, null, List.of("img-1"), "on", null));
@@ -244,7 +251,7 @@ class ChatControllerTest {
                 "img-1", "image/jpeg", "jpg", 1024, 800, 600, "abc", "2026-09-11T09:00:00", null, null, "2026-09-11", "", null)));
         when(uploads.read("img-1")).thenReturn(new byte[] {9});
         ChatController withVision = withPassthroughKeys(new ChatController(runner, tools, mock(ChatStreams.class), library,
-                uploads, new com.nongxin.service.VisionSupport()));
+                uploads, new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser()));
 
         var response = withVision.chat(new ChatRequest("openai", "unknown-vl-model-x", null, "test-key-no-provider-call",
                 List.of(new ChatMsg("user", "看看这张叶子")), null, null, null, null, List.of("img-1"), "on", null));
@@ -260,7 +267,7 @@ class ChatControllerTest {
         com.nongxin.service.UploadService uploads = mock(com.nongxin.service.UploadService.class);
         when(uploads.find(any())).thenReturn(List.of());
         ChatController strict = withPassthroughKeys(new ChatController(runner, tools, mock(ChatStreams.class), library,
-                uploads, new com.nongxin.service.VisionSupport()));
+                uploads, new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser()));
 
         var response = strict.chat(new ChatRequest("openai", "gpt-4o-mini", null, "test-key-no-provider-call",
                 List.of(new ChatMsg("user", "看看这张")), null, null, null, null, List.of("img-gone"), null, null));
@@ -270,21 +277,118 @@ class ChatControllerTest {
         verify(runner, never()).run(any(), anyList());
     }
 
-    /** 只汇报卡片、没有判断句时，服务端补一轮"只写判断段"，并把判断放在回答最前面。 */
+    /** Only a card receipt needs explanation; lack of diagnostic wording is not a reason to invent one. */
     @Test
-    void cardOnlyRepliesGetAVerdictParagraphAddedInFront() {
-        when(tools.buildRegistry()).thenReturn(new ToolRegistry());
+    void cardOnlyRepliesGetAnEvidenceBoundExplanationWithoutTools() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(com.nongxin.agent.ToolDefinition.of("submit_clarify", "test tool",
+                Map.of("type", "object"), (args, ctx) -> "test result"));
+        when(tools.buildRegistry()).thenReturn(registry);
         when(runner.run(any(), anyList())).thenReturn(
-                new AgentResult("处方单已经提交好了，一共 3 项：下田核查、补施药、复查。", List.of(planSubmission()), 3, false),
-                new AgentResult("最可能是稻瘟病（叶瘟）：叶尖有梭形斑、边缘褐色；不太像胡麻斑，那种斑更圆、中心发白。如果穗颈发黑，我上面的判断就要改。", List.of(), 1, false));
+                new AgentResult("确认卡已经发出了。", List.of(clarifySubmission()), 2, false),
+                new AgentResult("现有信息还不能确定原因，请先记录作物和症状，再补充确认卡。", List.of(), 1, false));
 
         var response = controller.chat(request(List.of(new ChatMsg("user", "我的水稻到底怎么了？"))));
 
         String reply = ((ChatResponse) response.getBody()).reply();
-        assertThat(reply).startsWith("最可能是稻瘟病");
-        assertThat(reply).contains("处方单已经提交好了");
-        assertThat(((ChatResponse) response.getBody()).plan()).isNotNull();
+        assertThat(reply).startsWith("现有信息还不能确定原因").contains("确认卡已经发出了");
+        assertThat(((ChatResponse) response.getBody()).clarify()).isNotNull();
+        ArgumentCaptor<AgentRunner.Config> configs = ArgumentCaptor.forClass(AgentRunner.Config.class);
+        ArgumentCaptor<List<Map<String, Object>>> histories = ArgumentCaptor.forClass(List.class);
+        verify(runner, times(2)).run(configs.capture(), histories.capture());
+        AgentRunner.Config supplement = configs.getAllValues().get(1);
+        assertThat(configs.getAllValues().getFirst().tools().collect(supplement.ctx())).hasSize(1);
+        assertThat(supplement.tools().collect(supplement.ctx())).isEmpty();
+        String instruction = String.valueOf(histories.getAllValues().get(1).getLast().get("content"));
+        assertThat(instruction).contains("信息不足时明确说明未知", "不得新增诊断", "核查步骤")
+                .doesNotContain("不许用", "最可能是什么");
+    }
+
+    private static ToolSubmission clarifySubmission() {
+        return new ToolSubmission("submit_clarify", Map.of("intro", "补充实际情况", "items",
+                List.of(Map.of("question", "还有哪些现场信息？", "options", List.of("暂不确定")))), "已登记确认清单");
+    }
+
+    static java.util.stream.Stream<List<ChatMsg>> missingFactCases() {
+        return java.util.stream.Stream.of(
+                List.of(new ChatMsg("user", "地里的植物不对劲，我没说是什么作物。")),
+                List.of(new ChatMsg("user", "我的水稻怎么了？还没有观察具体症状。")),
+                List.of(new ChatMsg("user", "昨天已收割的这块水稻田，今天要治穗颈病吗？日期可能记错了。")),
+                List.of(new ChatMsg("user", "这周能打药吗？没有位置和天气信息。")),
+                List.of(new ChatMsg("assistant", "确认卡：品种和用药史是什么？"), new ChatMsg("user", "两项都暂不确定。")),
+                List.of(new ChatMsg("assistant", "确认卡：作物是什么？"), new ChatMsg("user", "暂不确定。"),
+                        new ChatMsg("assistant", "确认卡：能补拍照片吗？"), new ChatMsg("user", "暂时没有照片，仍不知道。")));
+    }
+
+    @ParameterizedTest
+    @MethodSource("missingFactCases")
+    void missingFactsDoNotForceADiagnosisOrAnAdditionalModelCall(List<ChatMsg> history) {
+        String uncertain = "现有信息不足以确定原因，请先记录现场实际情况，再补充确认卡。";
+        when(tools.buildRegistry()).thenReturn(new ToolRegistry());
+        when(runner.run(any(), anyList())).thenReturn(new AgentResult(uncertain, List.of(clarifySubmission()), 1, false));
+
+        ChatResponse response = (ChatResponse) controller.chat(request(history)).getBody();
+
+        assertThat(response.reply()).isEqualTo(uncertain);
+        assertThat(response.plan()).isNull();
+        assertThat(response.clarify()).isNotNull();
+        ArgumentCaptor<AgentRunner.Config> config = ArgumentCaptor.forClass(AgentRunner.Config.class);
+        ArgumentCaptor<List<Map<String, Object>>> sent = ArgumentCaptor.forClass(List.class);
+        verify(runner).run(config.capture(), sent.capture());
+        assertThat(sent.getValue().getLast().get("content")).isEqualTo(history.getLast().content());
+        assertThat(config.getValue().systemPrompt())
+                .contains("一般知识问答", "信息不足时明确说明未知", "不按确认卡轮数强制", "仍然是未知", "矛盾信息先核实")
+                .doesNotContain("第一句必须先给判断", "不许用「信息不足」代替判断", "最多追问一轮", "信息没齐同样要提交", "禁止再调用 submit_clarify");
+    }
+
+    @Test
+    void usefulAdviceWithAPlanDoesNotRequireDiagnosticKeywords() {
+        String reply = "先记录受影响的部位和分布，按下方清单核查，不要把建议当成已经执行。";
+        when(tools.buildRegistry()).thenReturn(new ToolRegistry());
+        when(runner.run(any(), anyList())).thenReturn(new AgentResult(reply, List.of(planSubmission()), 1, false));
+
+        ChatResponse response = (ChatResponse) controller.chat(request(List.of(new ChatMsg("user", "帮我整理观察记录步骤")))).getBody();
+
+        assertThat(response.reply()).isEqualTo(reply);
+        assertThat(response.plan()).isNotNull();
+        verify(runner).run(any(), anyList());
+    }
+
+    @Test
+    void degradedCardReceiptDoesNotTriggerMoreProviderWork() {
+        when(tools.buildRegistry()).thenReturn(new ToolRegistry());
+        when(runner.run(any(), anyList())).thenReturn(new AgentResult("确认卡已发出。", List.of(clarifySubmission()), 2, true));
+
+        ChatResponse response = (ChatResponse) controller.chat(request(List.of(new ChatMsg("user", "还缺什么信息")))).getBody();
+
+        assertThat(response.degraded()).isTrue();
+        assertThat(response.clarify()).isNotNull();
+        verify(runner).run(any(), anyList());
+    }
+
+    @Test
+    void failedExplanationKeepsOriginalCardWithoutInventedFallback() {
+        when(tools.buildRegistry()).thenReturn(new ToolRegistry());
+        when(runner.run(any(), anyList()))
+                .thenReturn(new AgentResult("确认卡已发出。", List.of(clarifySubmission()), 2, false))
+                .thenThrow(new AgentRunner.ProviderException("测试供应商不可用", false));
+
+        ChatResponse response = (ChatResponse) controller.chat(request(List.of(new ChatMsg("user", "帮我看看情况")))).getBody();
+
+        assertThat(response.reply()).isEqualTo("确认卡已发出。");
+        assertThat(response.clarify()).isNotNull();
+        assertThat(response.plan()).isNull();
         verify(runner, times(2)).run(any(), anyList());
+    }
+
+    @Test
+    void cardReceiptDetectionDoesNotTreatRealAdviceOrUnknownsAsEmpty() {
+        assertThat(ChatController.isOnlyCardReceipt("确认卡已发出。请填写下方确认卡。" )).isTrue();
+        assertThat(ChatController.isOnlyCardReceipt("处方单已经提交好了，一共3项。" )).isTrue();
+        assertThat(ChatController.isOnlyCardReceipt("确认卡已发出。现有资料不足以确定原因。" )).isFalse();
+        assertThat(ChatController.isOnlyCardReceipt("先记录叶片的受损部位，再按确认卡补充。" )).isFalse();
+        assertThat(ChatController.isOnlyCardReceipt("方案已整理，共3项：拍照、记录、核实。" )).isFalse();
+        assertThat(ChatController.isOnlyCardReceipt("确认卡已发出。".repeat(30))).isFalse();
     }
 
     private static ToolSubmission planSubmission() {
@@ -297,7 +401,7 @@ class ChatControllerTest {
     void mapsWorkerPoolSaturationToOverloadedFor429Mapping() {        ChatStreams streams = mock(ChatStreams.class);
         when(streams.open(any())).thenThrow(new ChatStreams.Overloaded());
         ChatController saturated = new ChatController(runner, tools, streams, library,
-                mock(com.nongxin.service.UploadService.class), new com.nongxin.service.VisionSupport());
+                mock(com.nongxin.service.UploadService.class), new com.nongxin.service.VisionSupport(), new com.nongxin.service.CurrentUser());
 
         assertThatThrownBy(() -> saturated.stream(request(List.of(new ChatMsg("user", "你好"))),
                 new org.springframework.mock.web.MockHttpServletResponse()))
@@ -419,7 +523,7 @@ class ChatControllerTest {
                 .contains("已经过去的时段")
                 .contains("禁止出现整篇只写")
                 .contains("不得原样重复追问")
-                .contains("禁止再调用 submit_clarify")
+                .contains("不按确认卡轮数强制")
                 .contains("必须与引用来源一致")
                 .contains("必须说明偏差")
                 .contains("不得编造或推断用户所在的行政区划")
@@ -429,9 +533,8 @@ class ChatControllerTest {
                 .contains("【执行与复查记录】")
                 .contains("才算「真的做了」")
                 .contains("必须说明「哪里变了、为什么变」")
-                .contains("追问不是推迟给方案的理由")
-                .contains("一轮一件事")
-                .contains("信息没问完就不要给方案")
+                .contains("需要补齐影响具体行动安全性的关键信息时，本轮只提交确认卡")
+                .contains("非关键安排细节可写「待确认」")
                 .contains("正文长度预算");
     }
 

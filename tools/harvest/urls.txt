@@ -1,0 +1,7 @@
+﻿# 农心资料库采集清单（Tier 1：官方行政性公开文件）
+# 每行一个页面地址；# 开头为注释。采集前请确认该文件属"行政性公开文件"或已获授权。
+http://nynct.gxzf.gov.cn/xwdt/syjs/t27431005.shtml
+https://nync.hebei.gov.cn/html/www/zwdt/2034197796794212353.html
+# 新增（2026-09-12 第二批）
+https://nyncj.wuhan.gov.cn/bmfucx/njykt/202604/t20260427_2757949.html
+https://www.moa.gov.cn:10443/govpublic/ZZYGLS/202603/t20260316_6482257.htm

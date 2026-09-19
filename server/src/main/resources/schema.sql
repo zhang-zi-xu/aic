@@ -1,6 +1,6 @@
--- 农心 Agent 数据库结构（SQLite）——目标结构（最新版本 v3）
--- 说明：本文件负责"新库直接建到目标结构"（全部 CREATE TABLE IF NOT EXISTS，对已有库无副作用）；
--- 已有数据库的字段变化由 SchemaMigrationService 按版本升级（升级前自动备份到 data/backup）。
+-- 农心 Agent 数据库结构（SQLite）——目标结构 v5
+-- 仅由受控初始化入口用于空库建表，或在已有库完成备份和迁移后补齐配套表。
+-- CREATE TABLE IF NOT EXISTS 不能升级已有表；禁止在旧库备份/迁移之前直接运行本脚本。
 CREATE TABLE IF NOT EXISTS fields (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -158,8 +158,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   note TEXT NOT NULL DEFAULT ''
 );
 
--- 仅当库已经是目标结构（本文件刚刚建库）时才登记基线版本；
--- 老库不会写入，留给迁移服务按版本升级并备份。
+-- 调用方必须保证空库或已成功迁移；空版本表本身不能证明结构已达到目标版本。
+-- 应用入口在事务内运行脚本和结构校验，失败不会留下新库的部分结构或版本登记。
 INSERT INTO schema_version (version, applied_at, note)
 SELECT 5, datetime('now','localtime'), 'schema.sql 直接建库（目标结构 v5：含数据归属）'
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);

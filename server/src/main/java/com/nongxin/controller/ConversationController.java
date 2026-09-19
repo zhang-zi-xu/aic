@@ -3,6 +3,7 @@ package com.nongxin.controller;
 import com.nongxin.model.Conversation;
 import com.nongxin.model.SavedChatMessage;
 import com.nongxin.service.ConversationService;
+import com.nongxin.service.CurrentUser;
 import com.nongxin.service.FieldService;
 import com.nongxin.service.KnowledgeLibrary;
 import com.nongxin.service.UploadService;
@@ -22,20 +23,28 @@ public class ConversationController {
     private final FieldService fields;
     private final KnowledgeLibrary library;
     private final UploadService uploads;
+    private final CurrentUser currentUser;
 
     public ConversationController(ConversationService conversations, FieldService fields, KnowledgeLibrary library,
-                                  UploadService uploads) {
+                                  UploadService uploads, CurrentUser currentUser) {
         this.conversations = conversations;
         this.fields = fields;
         this.library = library;
         this.uploads = uploads;
+        this.currentUser = currentUser;
     }
 
     @GetMapping
-    public List<Conversation> list() { return conversations.list(); }
+    public List<Conversation> list() {
+        return currentUser.withSnapshot(currentUser.capture(), conversations::list);
+    }
 
     @PutMapping("/{id}")
     public Conversation save(@PathVariable String id, @RequestBody Conversation conversation) {
+        return currentUser.withSnapshot(currentUser.capture(), () -> saveOwned(id, conversation));
+    }
+
+    private Conversation saveOwned(String id, Conversation conversation) {
         RequestValidation.matchingId(id, conversation.id());
         String title = RequestValidation.requiredText(conversation.title(), "对话标题", 200);
         String fieldId = conversation.fieldId() == null || conversation.fieldId().isBlank() ? null : conversation.fieldId();
@@ -66,10 +75,12 @@ public class ConversationController {
                     message.plan(), message.risk(), message.clarify(), message.evidence(), message.status(),
                     message.error(), message.requestContext(), message.degraded(), rebuildSources(message.sources()), images));
         }
-        Conversation saved = conversations.save(new Conversation(id, title, fieldId, sanitized, RequestValidation.createdAt(conversation.createdAt())));
-        // 被会话引用的图片不再参与过期清理（生命周期管理）
-        uploads.markReferenced(referencedImages);
-        return saved;
+        Conversation prepared = new Conversation(id, title, fieldId, sanitized, RequestValidation.createdAt(conversation.createdAt()));
+        return conversations.inSaveTransaction(() -> {
+            // Image validation above is only a snapshot. Confirm ownership/existence and pin before writing the chat.
+            if (!uploads.confirmConversationReferences(referencedImages)) throw new ConversationService.SaveUnavailable();
+            return conversations.save(prepared);
+        });
     }
 
     /**
@@ -103,16 +114,19 @@ public class ConversationController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
-        return conversations.delete(id) ? ResponseEntity.ok(Map.of("deleted", true))
-                : ResponseEntity.status(404).body(Map.of("error", "对话不存在"));
+        return currentUser.withSnapshot(currentUser.capture(), () ->
+                conversations.delete(id) ? ResponseEntity.ok(Map.of("deleted", true))
+                        : ResponseEntity.status(404).body(Map.of("error", "对话不存在")));
     }
 
     @PatchMapping("/{id}")
     public ResponseEntity<?> rename(@PathVariable String id, @RequestBody Map<String, String> body) {
-        RequestValidation.id(id);
-        String title = RequestValidation.requiredText(body.get("title"), "对话标题", 200);
-        return conversations.rename(id, title) ? ResponseEntity.ok(conversations.get(id))
-                : ResponseEntity.status(404).body(Map.of("error", "对话不存在"));
+        return currentUser.withSnapshot(currentUser.capture(), () -> {
+            RequestValidation.id(id);
+            String title = RequestValidation.requiredText(body.get("title"), "对话标题", 200);
+            return conversations.rename(id, title) ? ResponseEntity.ok(conversations.get(id))
+                    : ResponseEntity.status(404).body(Map.of("error", "对话不存在"));
+        });
     }
 
     private void rejectPrivateKeys(Object value) {
