@@ -1,0 +1,19 @@
+﻿
+[rice-2026] 2026年水稻主要防哪些病虫害？稻瘟病该在什么时候打药？
+  状态=200 耗时=7.4s 检索来源=3 引用=0 引用合规=✅
+  命中新来源：chunk-natesc-rice-pest-2026-1, chunk-natesc-rice-pest-2026-8, chunk-natesc-rice-pest-2026-9
+  回复首句：确认卡已经发过去了，说明一下为什么问这三项：
+
+[pesticide] 打农药要注意什么？安全间隔期是怎么回事？
+  状态=200 耗时=6.0s 检索来源=3 引用=1 引用合规=✅
+  命中新来源：chunk-moa-precise-pesticide-2026-11, chunk-moa-precise-pesticide-2026-10, chunk-moa-precise-pesticide-2026-1
+  回复首句：这是两个很实在的问题，我分开说。
+
+[wheat] 小麦一喷三防是打什么、什么时候打？
+  状态=200 耗时=5.1s 检索来源=3 引用=5 引用合规=✅
+  命中新来源：chunk-natesc-wheat-yipensanfang-2026-1, chunk-natesc-wheat-yipensanfang-2026-2, chunk-natesc-wheat-yipensanfang-2026-3
+  回复首句：小麦“一喷三防”，简单说就是抽穗以后把杀虫剂、杀菌剂、植物生长调节剂和叶面肥（有时加助剂）混在一起喷一次，一次作业同时防病虫、防干热风、防早衰。这是全国农技推广服务中心《小麦“一喷
+
+=== 汇总 ===
+命中新增官方文件的问题数：3/3
+引用全部合规：是

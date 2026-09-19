@@ -31,6 +31,48 @@ const CHROME = /(无障碍浏览|信息员登录|智能问答|新媒体矩阵|�
 const ENTITIES = { '&gt;': '>', '&lt;': '<', '&amp;': '&', '&quot;': '"', '&#39;': "'", '&apos;': "'",
   '&nbsp;': ' ', '&ldquo;': '“', '&rdquo;': '”', '&mdash;': '—', '&middot;': '·', '&hellip;': '…' };
 
+/** 按片段内容识别作物：一份文件可能覆盖多种作物（如省级主推技术指南），
+ *  若统统一律标成 manifest 里的首个作物，会污染"按作物过滤"的检索。 */
+const CROP_WORDS = {
+  水稻: ['水稻', '稻瘟', '稻飞虱', '稻曲', '纹枯', '二化螟', '稻纵卷叶螟', '育秧', '插秧', '齐穗', '穗颈瘟', '再生稻'],
+  小麦: ['小麦', '麦田', '赤霉', '条锈', '叶锈', '麦蚜', '麦蜘蛛', '一喷三防', '冬小麦'],
+  玉米: ['玉米', '草地贪夜蛾', '大斑病', '小斑病', '玉米螟'],
+  油菜: ['油菜', '菌核病', '油菜蚜'],
+  大豆: ['大豆', '大豆蚜'],
+  马铃薯: ['马铃薯', '晚疫病'],
+  蔬菜: ['蔬菜', '番茄', '黄瓜', '辣椒', '白菜', '设施蔬菜'],
+  果树: ['果树', '苹果', '柑橘', '梨树', '桃树'],
+  茶: ['茶树', '茶园'],
+};
+
+function detectCrop(text, fallback) {
+  let best = null;
+  let bestHits = 0;
+  for (const [crop, words] of Object.entries(CROP_WORDS)) {
+    const hits = words.reduce((sum, word) => sum + (text.includes(word) ? 1 : 0), 0);
+    if (hits > bestHits) { best = crop; bestHits = hits; }
+  }
+  return bestHits > 0 ? best : fallback;
+}
+
+/**
+ * 按片段内容提取关键词。
+ * 教训：早期把"文档级关键词"复制到该文档的每个片段上，导致一份 145 片段的省级主推技术指南
+ * 每个片段都带「玉米」，把真正讲玉米倒伏的片段挤出了检索前五。关键词必须逐片段从正文里取。
+ */
+const KEY_TERMS = ['稻瘟病', '稻曲病', '纹枯病', '白叶枯病', '细菌性条斑病', '稻飞虱', '二化螟', '稻纵卷叶螟', '三化螟', '穗颈瘟',
+  '赤霉病', '条锈病', '叶锈病', '茎基腐病', '麦蚜', '麦蜘蛛', '地下害虫', '蛴螬', '金针虫', '草地贪夜蛾', '玉米螟',
+  '菌核病', '晚疫病', '病毒病', '白粉病', '蚜虫', '红蜘蛛', '蓟马', '斜纹夜蛾',
+  '倒伏', '控旺', '一喷三防', '一喷多促', '药剂拌种', '拌种', '种子包衣', '破口期', '齐穗', '抽穗', '灌浆', '孕穗', '分蘖', '苗期', '返青', '拔节',
+  '施肥', '追肥', '测土配方', '有机肥', '化肥减量', '灌溉', '排水', '晒田', '断水', '育秧', '插秧', '机插', '直播', '抛秧', '再生稻',
+  '农药', '安全间隔期', '农药残留', '绿色防控', '生物防治', '理化诱控', '统防统治', '抗药性', '抗性品种', '植保无人飞机', '无人机',
+  '收获', '收割', '烘干', '贮藏', '秸秆还田', '高标准农田'];
+
+function detectKeywords(text) {
+  const found = KEY_TERMS.filter(term => text.includes(term));
+  return found.slice(0, 8);
+}
+
 /** 清洗正文：解码实体 → 丢弃页面外壳行 → 去掉行首日期/来源等版式痕迹 → 压缩空白 */
 function cleanBody(text, title) {
   let out = text;
@@ -98,24 +140,28 @@ for (const entry of manifest) {
 
   // 分段并合并成 400–900 字的片段
   const paragraphs = body.split(/\n{1,}/).map(line => line.trim()).filter(line => line.length > 0);
+  const keepCrops = entry.keepCrops ?? null;   // 可限定只保留某些作物的片段（如省级综合指南只留水稻/小麦）
   let index = 0;
   let current = null;
+  let dropped = 0;
   const flush = () => {
     if (!current) return;
     const text = current.lines.join('');
     if (text.length >= 80) {
+      const crop = detectCrop(text, entry.crops.length === 1 ? entry.crops[0] : '通用');
+      if (keepCrops && !keepCrops.includes(crop)) { dropped++; current = null; return; }
       index += 1;
       chunks.push({
         id: `chunk-${entry.id.replace(/^doc-/, '')}-${index}`,
         documentId: entry.id,
         heading: current.heading || entry.title,
         locator: `正文片段 ${index}`,
-        crop: entry.crops[0],
+        crop,
         region: entry.region,
         growthStage: current.growthStage ?? '',
         topic: entry.topic,
         text,
-        keywords: entry.keywords ?? [],
+        keywords: detectKeywords(text),
       });
     }
     current = null;
@@ -131,6 +177,7 @@ for (const entry of manifest) {
     else if (current.lines.join('').length >= 400 && /[。；]$/.test(paragraph)) flush();
   }
   flush();
+  if (dropped > 0) console.log(`  （${entry.id}：按 keepCrops 丢弃 ${dropped} 个非目标作物片段）`);
 }
 
 if (problems.length) {

@@ -92,33 +92,7 @@ public class AgriTools {
                 Map.of("type", "object",
                         "properties", Map.of("query", Map.of("type", "string", "description", "检索关键词，如：水稻稻瘟病、小麦赤霉病、高温热害、连阴雨")),
                         "required", List.of("query")),
-                (args, ctx) -> {
-                    String query = args.get("query") instanceof String s ? s : "";
-                    if (query.isBlank()) return "请提供检索关键词。";
-                    FieldProfile field = ctx.extra("field") instanceof FieldProfile f ? f : null;
-                    String fieldCrop = field == null || field.crop() == null || field.crop().isBlank() ? null : field.crop().trim();
-                    // 用户在田块（例如水稻）下问另一个作物（例如小麦）时，按问题里的作物检索，否则会被田块作物硬过滤挡掉。
-                    String askedCrop = knowledge.detectCrop(query);
-                    String cropFilter = askedCrop != null ? askedCrop : fieldCrop;
-                    boolean crossCrop = askedCrop != null && fieldCrop != null && !askedCrop.equals(fieldCrop);
-                    String region = KnowledgeLibrary.regionOf(locationLabel(ctx));
-                    List<KnowledgeLibrary.SourcedHit> hits = knowledge.search(query, cropFilter, region, 3);
-                    if (hits.isEmpty()) {
-                        return "没有检索到与本问题相关的已登记资料。请明确说明依据不足，给出下一步需要现场核实的信息，不要凭记忆补充药剂剂量或登记信息。";
-                    }
-                    Set<String> retrieved = ctx.extra(RETRIEVED_CHUNKS) instanceof Set<?> existing
-                            ? new LinkedHashSet<>((Set<String>) existing) : new LinkedHashSet<>();
-                    for (KnowledgeLibrary.SourcedHit hit : hits) retrieved.add(hit.chunk().id());
-                    ctx.put(RETRIEVED_CHUNKS, retrieved);
-                    String external = knowledge.formatForModel(hits);
-                    if (crossCrop) {
-                        external = "注意：本次按问题中提到的「" + askedCrop + "」检索，与当前田块作物（" + fieldCrop + "）不同。"
-                                + "这些资料只能用于回答用户关于" + askedCrop + "的问题，不得用于当前田块的处方；回答时先说明这一点。\n" + external;
-                    }
-                    // 田块档案参与检索：从本田块历史记录中筛出与本次问题相关的条目（本地档案，不计入外部来源）
-                    String archive = matchFieldRecords(field, query);
-                    return archive.isBlank() ? external : archive + "\n\n" + external;
-                }));
+                (args, ctx) -> prefetch(ctx, args.get("query") instanceof String s ? s : "")));
 
         // ---- 7 日天气 ----
         registry.register(ToolDefinition.of("get_weather_forecast",
@@ -262,6 +236,40 @@ public class AgriTools {
         sb.append("\n（这些是用户自己拍的照片；本轮有没有随附原图要看这次请求。");
         sb.append("需要看图时提示用户点「让农心看这块地最近的状况」，不要假装看过没发来的照片）");
         return sb.toString();
+    }
+
+    /**
+     * 检索已登记资料。既是 search_agri_knowledge 工具的实现，也供服务端**预检索**调用。
+     *
+     * <p>为什么要预检索：检索原本完全依赖模型自愿调用工具，实测"打农药要注意什么？安全间隔期？"
+     * 这类听起来像常识的问题，模型会跳过检索、直接凭记忆回答（无引用）。服务端在提问后按农业关键词
+     * 自动检索一次并把结果注入提示词，可保证这类问题也有依据可引。
+     */
+    public String prefetch(AgentContext ctx, String query) {
+        if (query == null || query.isBlank()) return "请提供检索关键词。";
+        FieldProfile field = ctx.extra("field") instanceof FieldProfile f ? f : null;
+        String fieldCrop = field == null || field.crop() == null || field.crop().isBlank() ? null : field.crop().trim();
+        // 用户在田块（例如水稻）下问另一个作物（例如小麦）时，按问题里的作物检索，否则会被田块作物硬过滤挡掉。
+        String askedCrop = knowledge.detectCrop(query);
+        String cropFilter = askedCrop != null ? askedCrop : fieldCrop;
+        boolean crossCrop = askedCrop != null && fieldCrop != null && !askedCrop.equals(fieldCrop);
+        String region = KnowledgeLibrary.regionOf(locationLabel(ctx));
+        List<KnowledgeLibrary.SourcedHit> hits = knowledge.search(query, cropFilter, region, 3);
+        if (hits.isEmpty()) {
+            return "没有检索到与本问题相关的已登记资料。请明确说明依据不足，给出下一步需要现场核实的信息，不要凭记忆补充药剂剂量或登记信息。";
+        }
+        Set<String> retrieved = ctx.extra(RETRIEVED_CHUNKS) instanceof Set<?> existing
+                ? new LinkedHashSet<>((Set<String>) existing) : new LinkedHashSet<>();
+        for (KnowledgeLibrary.SourcedHit hit : hits) retrieved.add(hit.chunk().id());
+        ctx.put(RETRIEVED_CHUNKS, retrieved);
+        String external = knowledge.formatForModel(hits);
+        if (crossCrop) {
+            external = "注意：本次按问题中提到的「" + askedCrop + "」检索，与当前田块作物（" + fieldCrop + "）不同。"
+                    + "这些资料只能用于回答用户关于" + askedCrop + "的问题，不得用于当前田块的处方；回答时先说明这一点。\n" + external;
+        }
+        // 田块档案参与检索：从本田块历史记录中筛出与本次问题相关的条目（本地档案，不计入外部来源）
+        String archive = matchFieldRecords(field, query);
+        return archive.isBlank() ? external : archive + "\n\n" + external;
     }
 
     private String locationLabel(AgentContext ctx) {

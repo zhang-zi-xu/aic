@@ -24,9 +24,13 @@ class KnowledgeLibraryTest {
     @Test
     void loadsVerifiedSourcesAndKeepsLocalDraftsUnverified() {
         List<KnowledgeDocument> documents = library.documents();
-        // 已核验来源：5 篇原始 + 4 篇 2026 年官方防控/用药文件（Tier 1 采集）＝9 篇
+        // 已核验来源只增不减（Tier 1 采集会持续扩充）：断言下限 + 关键来源存在，避免每加一篇就改测试
+        assertThat(documents).filteredOn(KnowledgeDocument::verified).hasSizeGreaterThanOrEqualTo(13);
+        assertThat(documents).filteredOn(KnowledgeDocument::verified)
+                .extracting(KnowledgeDocument::id)
+                .contains("doc-moa-rice-yipen-2025", "doc-natesc-rice-pest-2026", "doc-natesc-wheat-spring-2026",
+                        "doc-natesc-wheat-yipensanfang-2026", "doc-moa-precise-pesticide-2026");
         // 本地草稿（kb.json）固定 17 篇；新增来源不会改变草稿数量
-        assertThat(documents).filteredOn(KnowledgeDocument::verified).hasSize(9);
         assertThat(documents).filteredOn(d -> !d.verified()).hasSize(17);
         assertThat(documents).filteredOn(KnowledgeDocument::verified)
                 .allSatisfy(d -> {
@@ -44,8 +48,8 @@ class KnowledgeLibraryTest {
                     assertThat(d.url()).isNull();
                     assertThat(d.reviewStatus()).isEqualTo("unverified");
                 });
-        // 片段总数：已核验 57（27 原始 + 30 新增）＋ 本地草稿 17 ＝ 74
-        assertThat(library.chunks()).hasSize(74);
+        // 片段总数只增不减：已核验来源持续扩充，断言下限即可（原先写死具体数字，每加/换一篇来源就要改测试）
+        assertThat(library.chunks().size()).as("资料库片段数").isGreaterThanOrEqualTo(150);
         assertThat(library.chunks()).allSatisfy(chunk -> {
             assertThat(chunk.documentId()).isNotBlank();
             assertThat(chunk.text()).isNotBlank();

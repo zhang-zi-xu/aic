@@ -47,7 +47,9 @@ public class VectorIndexBootstrap {
         Thread worker = new Thread(() -> {
             try {
                 long start = System.currentTimeMillis();
-                int written = vectorIndex.indexChunks(library.chunks(), false);
+                // force=true：先清空再重建。资料库可能"换过"片段（同一来源重新采集会替换片段），
+                // 不强制清空会残留已删除片段的向量，条数永远对不上、每次启动都触发重建。
+                int written = vectorIndex.indexChunks(library.chunks(), true);
                 log.info("启动向量索引完成：写入 {} 条，累计 {} 条，用时 {}ms",
                         written, vectorIndex.indexedCount(), System.currentTimeMillis() - start);
             } catch (Exception e) {

@@ -58,6 +58,35 @@ public class ChatController {
     /** 正文里可能出现的来源ID形态；未在本次命中集合中的一律标注。 */
     private static final Pattern SOURCE_ID_RE = Pattern.compile("chunk-[A-Za-z0-9-]{1,80}");
 
+    /** 农业相关问题特征：命中就做服务端预检索（宁可多检索一次，也不要模型凭记忆答农事问题）。 */
+    private static final Pattern AGRI_RE = Pattern.compile(
+            "农药|打药|用药|施药|喷药|间隔期|剂量|用量|残留|肥料|施肥|追肥|底肥|病虫|病害|虫害|防治|防控|"
+                    + "稻瘟|稻飞虱|螟虫|纹枯|稻曲|赤霉|锈病|白粉|蚜虫|红蜘蛛|除草|种子|品种|育苗|插秧|移栽|"
+                    + "灌溉|排水|断水|晒田|倒伏|控旺|抽穗|灌浆|分蘖|孕穗|破口|播种|收获|收割|天气|气温|降雨|霜冻|高温|干旱|涝|"
+                    + "水稻|小麦|玉米|油菜|大豆|薯|蔬菜|果树|茶");
+
+    /** 最后一条用户消息的纯文本（含多模态文本部分）。 */
+    private static String lastUserText(List<Map<String, Object>> history) {
+        for (int index = history.size() - 1; index >= 0; index--) {
+            Map<String, Object> message = history.get(index);
+            if (!"user".equals(message.get("role"))) continue;
+            Object content = message.get("content");
+            if (content instanceof String text) return text;
+            if (content instanceof List<?> parts) {
+                StringBuilder sb = new StringBuilder();
+                for (Object part : parts) {
+                    if (part instanceof Map<?, ?> map && map.get("text") instanceof String piece) sb.append(piece).append(' ');
+                }
+                return sb.toString();
+            }
+        }
+        return "";
+    }
+
+    static boolean looksAgricultural(String text) {
+        return text != null && !text.isBlank() && AGRI_RE.matcher(text).find();
+    }
+
     private final AgentRunner runner;
     private final AgriTools agriTools;
     private final ChatStreams streams;
@@ -186,6 +215,17 @@ public class ChatController {
             AgentContext ctx = new AgentContext(currentUser.id(), context);
 
             String systemPrompt = buildSystemPrompt(field, locationText, !images.isEmpty());
+            // 服务端预检索：涉及病虫害/农药/田间操作的问题先替模型检索一遍，避免它当成"常识"跳过检索、
+            // 直接凭记忆回答（实测「打农药要注意什么？安全间隔期？」就是这种情况）。
+            String question = lastUserText(history);
+            if (looksAgricultural(question)) {
+                String prefetched = agriTools.prefetch(ctx, question);
+                if (prefetched != null && !prefetched.isBlank()) {
+                    systemPrompt = systemPrompt + "\n【本轮已自动检索到的资料｜必须优先使用】\n" + prefetched
+                            + "\n（这是服务端按用户问题自动检索的结果，回答时引用其中的来源ID即可；"
+                            + "不要声称没有查到资料，也不得凭记忆补充剂量或登记信息。）\n";
+                }
+            }
 
             // All deterministic local preparation has succeeded. Reserve once, immediately before the runner.
             if (stream != null) stream.check();
