@@ -73,6 +73,42 @@
     "keywords": ["地下害虫", "蛴螬", "金针虫", "药剂拌种", "秋播", "小麦"]
   },
   {
+    "file": "12-汉中：当前水稻“两迁害虫”防治技术要点_陕西省农业农村厅.txt",
+    "id": "doc-shaanxi-hanzhong-migrants-2026",
+    "title": "汉中：当前水稻“两迁害虫”防治技术要点",
+    "institution": "陕西省农业农村厅（汉中市）",
+    "url": "https://nynct.shaanxi.gov.cn/zt/snzbxx/zbjs/202608/t20260804_3663236.html",
+    "publishedAt": "2026-08-04",
+    "region": "陕西",
+    "crops": ["水稻"],
+    "topic": "病虫害防治",
+    "keywords": ["稻飞虱", "稻纵卷叶螟", "两迁害虫", "防治指标", "防治适期", "水稻"]
+  },
+  {
+    "file": "13-植保无人飞机规范施药技术_种植业信息_省农业农村厅.txt",
+    "id": "doc-hlj-uav-spray-2026",
+    "title": "植保无人飞机规范施药技术",
+    "institution": "黑龙江省农业农村厅",
+    "url": "https://nynct.hlj.gov.cn/nynct/c115393/202606/c00_31949515.shtml",
+    "publishedAt": "2026-06-11",
+    "region": "黑龙江",
+    "crops": ["水稻", "小麦"],
+    "topic": "水肥与施药",
+    "keywords": ["植保无人飞机", "无人机", "飞防", "施药", "雾滴", "安全间隔期", "助剂"]
+  },
+  {
+    "file": "14-2026年岳阳县“虫口夺粮”保丰收行动方案-岳阳县人民政府.txt",
+    "id": "doc-hunan-yueyang-pest-action-2026",
+    "title": "2026年岳阳县“虫口夺粮”保丰收行动方案",
+    "institution": "湖南省岳阳县人民政府",
+    "url": "https://www.yyx.gov.cn/37584/38154/38157/38160/38207/38208/40149/content_2389336.html",
+    "publishedAt": "2026-04-06",
+    "region": "湖南",
+    "crops": ["水稻"],
+    "topic": "病虫害防治",
+    "keywords": ["虫口夺粮", "统防统治", "绿色防控", "稻飞虱", "二化螟", "稻纵卷叶螟", "水稻"]
+  },
+  {
     "file": "07-华容县病虫情报2026年第16期：抓好晚稻破口及一季穗期病虫害防控.txt",
     "id": "doc-hunan-huarong-pest-16",
     "title": "病虫情报2026年第16期：抓好晚稻破口及一季穗期病虫害防控",
